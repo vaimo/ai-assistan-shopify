@@ -18,6 +18,7 @@ help:
 	@echo "  make clean             Remove all containers and volumes"
 
 deploy-prod:
+	git pull
 	docker compose up -d
 
 deploy-local:
