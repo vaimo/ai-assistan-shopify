@@ -19,7 +19,12 @@ help:
 
 deploy-prod:
 	git pull
+	docker compose build
 	docker compose up -d
+	@echo "Waiting for containers to be healthy..."
+	sleep 5
+	@echo "Running backend migrations..."
+	docker compose exec app sh -c "cd /app/backend && npm run migration:run"
 
 deploy-local:
 ifdef FULL
