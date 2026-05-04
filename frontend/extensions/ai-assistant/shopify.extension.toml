@@ -8,5 +8,5 @@ uid = "f86b30a7-e5a7-5d4e-b33a-0a240196266ec1976fb8"
 
 [[extensions.targeting]]
 target = "admin.product-details.action.render"
-module = "./src/AssistantAction.tsx"
+module = "./src/ActionExtension.jsx"
 label = "AI Assistant"
