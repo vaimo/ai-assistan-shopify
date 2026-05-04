@@ -35,9 +35,8 @@ COPY --from=fe-builder /build/frontend/node_modules/prisma ./node_modules/prisma
 COPY --from=fe-builder /build/frontend/node_modules/.bin/prisma ./node_modules/.bin/prisma
 COPY frontend/prisma ./prisma
 COPY frontend/server.js ./
-COPY frontend/public ./public
 COPY frontend/shopify.app.prod.toml ./shopify.app.toml
-RUN mkdir -p data
+RUN mkdir -p data public
 
 # BE
 WORKDIR /app/backend
