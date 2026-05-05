@@ -1,38 +1,36 @@
-# Phase 1 Outcomes — Embedded Chat Widget
+# Phase 1 Outcomes — Embedded App Chat Widget
 
 ## Status
-Completed and tested by developer.
+Completed and validated in local development.
 
-## Delivered
-- Floating chat trigger button implemented.
-- Slide-in sidebar chat panel implemented.
-- Local mock chat endpoint implemented at `POST /api/chat`.
-- Chat widget wired into embedded app layout.
+## What Was Done
+- Added floating assistant button inside embedded app routes.
+- Added slide-in chat sidebar UI.
+- Added mock chat endpoint at `POST /api/chat`.
+- Wired widget into app layout route.
 
-## Delivered Files
+## Changed Files
 - `frontend/app/components/ChatWidget/FloatingButton.tsx`
 - `frontend/app/components/ChatWidget/ChatSidebar.tsx`
 - `frontend/app/components/ChatWidget/index.tsx`
 - `frontend/app/routes/api.chat.tsx`
 - `frontend/app/routes/app.tsx`
 
-## Behavior Confirmed
-- Widget is available in embedded app routes.
-- User message is added immediately.
-- Assistant mock response is appended after request completion.
+## Why It Was Done This Way
+- This gives immediate UX feedback and lets product/design iterate on assistant behavior before backend AI is ready.
+- Keeping the endpoint mocked decouples UI work from AI orchestration complexity.
+- Implementing inside embedded app (`/app/*`) avoids Shopify admin-surface constraints while proving core interaction first.
 
-## Known Gaps / Follow-up
-- Response is mocked only; no BE AI orchestration yet.
-- No conversation persistence.
-- No streaming response.
+## Verified Behavior
+- Floating button appears on embedded app pages.
+- Sidebar opens and closes reliably.
+- User message is appended instantly.
+- Mock assistant reply is appended after request completion.
 
-## Next (Phase 2)
-- Build Admin Action extension surface for:
-  - `admin.product-details.action.render`
-  - `admin.order-details.action.render`
-  - `admin.customer-details.action.render`
-- Reuse chat interaction model with secure token-authenticated backend calls.
+## Known Gaps
+- No real AI backend integration yet.
+- No persistence of conversation history.
+- No streaming token response.
 
-## Handoff Notes
-- Keep Phase 1 commit isolated from extension scaffolding for clean rollback.
-- Keep docs commit separate to simplify team onboarding and change review.
+## Phase 1 Exit Result
+Phase 1 objective was met: embedded assistant interaction is functional and testable.

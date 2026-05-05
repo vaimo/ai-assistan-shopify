@@ -1,119 +1,96 @@
-# Chat Assistant Widget — Implementation Plan
+# Chat Assistant — Master Plan and Delivery Record
 
-## Overview
+## Purpose
+Track what was planned, what changed during implementation, and why decisions were made.
 
-Implement a sidekick-style AI assistant UI for the Shopify embedded app with two surfaces:
+## Platform Constraint (Key)
+Shopify does not allow third-party apps to inject a persistent floating button across all native admin pages.
 
-1. **Floating sidebar** — persistent within the embedded App Home (`/app/*`), triggered by a FAB button
-2. **Admin Action extension** — appears in the "More actions" menu on Products, Orders, and Customers pages; opens a modal chat window
+Impact:
+- Floating assistant is possible inside embedded app routes.
+- Native admin pages require extension surfaces (actions/blocks), not global overlays.
 
-> **Platform constraint:** A truly persistent floating button across *all* Shopify admin pages is architecturally impossible for third-party apps (Shopify's sandbox model blocks cross-page DOM injection). The Admin Action extension is the closest native equivalent.
-
----
-
-## Architecture
+## Current Architecture
 
 ```
-Browser (Shopify Admin iframe)
-├── /app/* routes (Remix)
-│   ├── <ChatWidget />  ← floating FAB + sidebar (position: fixed inside iframe)
-│   └── <Outlet />      ← existing page content
+Shopify Admin
+├── Embedded app routes (/app/*)
+│   └── Floating chat widget (FAB + sidebar)
 │
-└── UI Extension (separate Preact bundle, deployed via Shopify CLI)
-    ├── admin.product-details.action.render  → modal chat
-    ├── admin.order-details.action.render    → modal chat
-    └── admin.customer-details.action.render → modal chat
+├── Admin Action extension
+│   └── Product details "More actions" entry
+│
+└── Admin Block extensions
+        ├── Product details visible block
+        ├── Order details visible block
+        └── Customer details visible block
 
-Remix Resource Route
-└── POST /api/chat  ← mock endpoint (real AI backend TBD)
+Shared mock endpoint
+└── POST /api/chat (Remix resource route)
 ```
 
----
-
-## Phases
+## Phase Status
 
 ### Phase 0 — Mock Chat API
-**File:** `frontend/app/routes/api.chat.tsx`
+Status: Completed.
 
-- Remix resource route, responds to `POST`
-- Accepts `{ message: string }` in the request body
-- Returns `{ reply: string }` with a placeholder response
-- Will be swapped for the real AI NestJS endpoint (port 3001) when ready
+What changed:
+- Added `frontend/app/routes/api.chat.tsx`.
 
----
+Why:
+- Needed stable frontend contract before backend AI orchestration was ready.
 
-### Phase 1 — Floating Chat Sidebar (App Home)
+### Phase 1 — Embedded App Floating Assistant
+Status: Completed.
 
-**Files created:**
-- `frontend/app/components/ChatWidget/FloatingButton.tsx` — FAB at bottom-right using Polaris `Button` + `position: fixed` inline styles
-- `frontend/app/components/ChatWidget/ChatSidebar.tsx` — sliding panel (right side) using `position: fixed` + CSS `transform: translateX(...)` transition; contains message list + Polaris `TextField` + send `Button`
-- `frontend/app/components/ChatWidget/index.tsx` — composes FAB + sidebar, manages `isOpen` state, calls `/api/chat` via Remix `useFetcher`
+What changed:
+- Added `frontend/app/components/ChatWidget/` components.
+- Wired widget in `frontend/app/routes/app.tsx`.
 
-**File modified:**
-- `frontend/app/routes/app.tsx` — renders `<ChatWidget />` alongside `<Outlet />` inside `<AppProvider>`
+Why:
+- Fastest path to validate UX and chat interaction inside controlled iframe context.
 
-**UX behaviour:**
-- FAB is always visible in the bottom-right corner of the app iframe
-- Clicking FAB opens the sidebar with a slide-in animation
-- User types a message and clicks Send; the message appears in the list immediately; a mock reply is appended after the fetch resolves
-- Sidebar has an X close button
+### Phase 2 — Admin Extensions in Shopify Native UI
+Status: In progress, delivered in increments.
 
----
+What changed:
+- Added admin action extension in `frontend/extensions/ai-assistant/` for product details.
+- Added visible admin block extensions:
+    - `frontend/extensions/ai-assistant-product-block/`
+    - `frontend/extensions/ai-assistant-order-block/`
+    - `frontend/extensions/ai-assistant-customer-block/`
 
-### Phase 2 — Admin Action UI Extension
+Why changed from initial plan:
+- Original approach expected multi-target action in one extension and React wrapper implementation.
+- Real CLI/runtime behavior required:
+    - One target per admin action/block extension in generated model.
+    - Preact scaffold compatibility for stable CLI/build workflow.
+- Merchant UX requirement demanded visible button-like entry outside "More actions", which is best served by admin blocks.
 
-**Directory:** `frontend/extensions/ai-assistant/`
+## Decisions Log
 
-Scaffolded via Shopify CLI:
-```bash
-cd frontend
-shopify app generate extension --template admin_action --name "ai-assistant"
-```
+1. Keep embedded floating assistant.
+Reason: best UX inside app surface and no platform restrictions.
 
-**`shopify.extension.toml` targets:**
-```toml
-[[extensions.targeting]]
-target = "admin.product-details.action.render"
-module = "./src/AssistantAction.tsx"
+2. Keep admin action extension for product details.
+Reason: standard native flow and modal interaction entry.
 
-[[extensions.targeting]]
-target = "admin.order-details.action.render"
-module = "./src/AssistantAction.tsx"
+3. Add 3 admin blocks (product/order/customer).
+Reason: visible assistant entry on key pages without relying on "More actions".
 
-[[extensions.targeting]]
-target = "admin.customer-details.action.render"
-module = "./src/AssistantAction.tsx"
-```
+4. Use mock endpoint for all surfaces.
+Reason: consistent UI testing while backend AI is pending.
 
-**`src/AssistantAction.tsx`:**
-- Uses `@shopify/ui-extensions-react/admin` (Preact-based — required for extensions, not React)
-- Wraps content in `<AdminAction>` (the modal container)
-- Renders a `<BlockStack>` chat layout with a scrollable message list, `<TextField>`, and `<Button>`
-- Calls `POST /api/chat` on the app's public URL for mock responses
-- Session token passed via `useSessionToken()` (from extensions-react) as `Authorization: Bearer` header — wired but unused by mock
+## Remaining Work
 
----
+- Replace mock `/api/chat` with backend AI endpoint.
+- Add robust auth verification path for extension-origin calls.
+- Add per-surface context prompts and richer assistant actions.
+- Add persistence/history and streaming responses.
 
-## Files Summary
+## How To Extend Coverage
 
-| Action | Path |
-|--------|------|
-| Create | `frontend/app/routes/api.chat.tsx` |
-| Create | `frontend/app/components/ChatWidget/index.tsx` |
-| Create | `frontend/app/components/ChatWidget/FloatingButton.tsx` |
-| Create | `frontend/app/components/ChatWidget/ChatSidebar.tsx` |
-| Modify | `frontend/app/routes/app.tsx` |
-| Scaffold (CLI) | `frontend/extensions/ai-assistant/` |
-| Modify | `frontend/extensions/ai-assistant/shopify.extension.toml` |
-| Create | `frontend/extensions/ai-assistant/src/AssistantAction.tsx` |
-
----
-
-## Future Work (Out of Scope Now)
-
-- Replace mock `/api/chat` with real NestJS AI endpoint
-- Add proper HMAC or session-token auth to `/api/chat`
-- Extend Admin Action targets to draft orders, collections, discounts
-- Persist chat history (local storage or backend)
-- Stream AI responses (SSE / chunked responses)
-- Style polish: branded colours, typing indicator, timestamps
+For each new page surface:
+1. Generate a new admin action or admin block extension.
+2. Set the target in `shopify.extension.toml`.
+3. Reuse the same chat call contract to `/api/chat`.
