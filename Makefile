@@ -1,5 +1,9 @@
 .PHONY: help deploy-prod deploy-local local-stop local-logs local-shell-fe local-shell-be clean
 
+PROJECT_ROOT := $(shell git rev-parse --show-toplevel)
+COMPOSE_DEBUG := docker compose --project-directory $(PROJECT_ROOT) -f $(PROJECT_ROOT)/docker-compose.debug.yml
+COMPOSE_PROD := docker compose --project-directory $(PROJECT_ROOT) -f $(PROJECT_ROOT)/docker-compose.yml
+
 help:
 	@echo "AI Assistant Shopify Project — Available Commands"
 	@echo ""
@@ -19,30 +23,30 @@ help:
 
 deploy-prod:
 	git pull
-	docker compose up -d
+	$(COMPOSE_PROD) up -d
 
 deploy-local:
 ifdef FULL
 	@echo "Full reset: stopping containers, removing volumes, rebuilding..."
-	docker compose -f docker-compose.debug.yml down -v
-	docker compose -f docker-compose.debug.yml build --no-cache
-	docker compose -f docker-compose.debug.yml up -d
+	$(COMPOSE_DEBUG) down -v
+	$(COMPOSE_DEBUG) build --no-cache
+	$(COMPOSE_DEBUG) up -d
 else
-	docker compose -f docker-compose.debug.yml up -d
+	$(COMPOSE_DEBUG) up -d
 endif
 
 local-stop:
-	docker compose -f docker-compose.debug.yml down
+	$(COMPOSE_DEBUG) down
 
 local-logs:
-	docker compose -f docker-compose.debug.yml logs -f
+	$(COMPOSE_DEBUG) logs -f
 
 local-shell-fe:
-	docker compose -f docker-compose.debug.yml exec app sh -c "cd /app/frontend && sh"
+	$(COMPOSE_DEBUG) exec app sh -c "cd /app/frontend && sh"
 
 local-shell-be:
-	docker compose -f docker-compose.debug.yml exec app sh -c "cd /app/backend && sh"
+	$(COMPOSE_DEBUG) exec app sh -c "cd /app/backend && sh"
 
 clean:
-	docker compose down -v
-	docker compose -f docker-compose.debug.yml down -v
+	$(COMPOSE_PROD) down -v
+	$(COMPOSE_DEBUG) down -v
