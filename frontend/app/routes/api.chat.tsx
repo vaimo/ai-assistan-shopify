@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
+import { authenticate } from "~/shopify.server";
 
 // ─────────────────────────────────────────────────────────────────
 // MOCK CONFIGURATION — remove / replace when wiring the real backend
@@ -36,6 +37,8 @@ function mockDelay(): Promise<void> {
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  await authenticate.admin(request);
+
   if (request.method !== "POST") {
     return json({ error: "Method not allowed" }, { status: 405 });
   }

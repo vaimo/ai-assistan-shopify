@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useFetcher } from "@remix-run/react";
 import { authenticate } from "~/shopify.server";
 import type { LoaderFunctionArgs } from "@remix-run/node";
@@ -40,11 +40,6 @@ const SUGGESTED_QUESTIONS: SuggestedQuestion[] = [
   },
 ];
 
-let messageIdCounter = 0;
-function nextId() {
-  return String(++messageIdCounter);
-}
-
 export default function AssistantPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -73,21 +68,20 @@ export default function AssistantPage() {
       const trimmed = text.trim();
       if (!trimmed || isLoading) return;
 
-      const userMsg: ChatMessage = {
-        id: nextId(),
-        role: "user",
-        content: trimmed,
-      };
-      setMessages((prev) => [...prev, userMsg]);
+      setMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: "user", content: trimmed },
+      ]);
       setInputValue("");
 
+      // fetcher is intentionally omitted from deps — useFetcher() returns a stable reference in Remix v2
       fetcher.submit(JSON.stringify({ message: trimmed }), {
         method: "POST",
         action: "/api/chat",
         encType: "application/json",
       });
     },
-    [isLoading, fetcher],
+    [isLoading], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const handleSend = useCallback(() => {
@@ -97,16 +91,16 @@ export default function AssistantPage() {
   // Append assistant reply (or error) when fetcher resolves
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data) {
-      const data = fetcher.data as ChatApiResponse;
+      const data = fetcher.data;
       if ("reply" in data) {
         setMessages((prev) => [
           ...prev,
-          { id: nextId(), role: "assistant", content: data.reply },
+          { id: crypto.randomUUID(), role: "assistant", content: data.reply },
         ]);
       } else if ("error" in data) {
         setMessages((prev) => [
           ...prev,
-          { id: nextId(), role: "assistant", content: data.error, isError: true },
+          { id: crypto.randomUUID(), role: "assistant", content: data.error, isError: true },
         ]);
       }
     }
