@@ -30,6 +30,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const backendUrl = process.env.BACKEND_URL || "http://localhost:3004";
   const shopId = session.shop;
 
+  // ── Dev / Testing flags ─────────────────────────────────────────────────────
+  // These come from the Dev / Testing section in the Configuration UI.
+  // They are only registered in non-production (NODE_ENV !== 'production').
+  // In production the fetch returns {} and both flags stay false.
+  let devForceError = false;
+  let devForceNotConfigured = false;
+  try {
+    const devRes = await fetch(`${backendUrl}/config/${shopId}/dev_testing`, {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (devRes.ok) {
+      const devCfg = await devRes.json() as { general?: { force_error?: unknown; force_not_configured?: unknown } };
+      devForceError = Number(devCfg?.general?.force_error) === 1;
+      devForceNotConfigured = Number(devCfg?.general?.force_not_configured) === 1;
+    }
+  } catch { /* non-production only — ignore gracefully */ }
+
+  if (devForceNotConfigured) {
+    return json(
+      { error: "Lokte is not configured for this shop. Please complete the setup in Configuration." },
+      { status: 503 },
+    );
+  }
+  if (devForceError) {
+    return json(
+      { error: "Something went wrong on the server. Please try again." },
+      { status: 500 },
+    );
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   let response: Response;
   try {
     response = await fetch(`${backendUrl}/lokte/${shopId}/question`, {

@@ -3,9 +3,13 @@ import { useFetcher, useLoaderData } from "@remix-run/react";
 import { authenticate } from "~/shopify.server";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { Spinner, Banner, Link } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { assistantTheme as theme } from "~/styles/assistant-theme";
+
+// ── DEV / TEST FLAGS ────────────────────────────────────────────────────────
+// Flags are driven by the Dev / Testing section in the Configuration UI
+// (backend DevToolsModule, non-production only). No hardcoded constants here.
+// ────────────────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -21,11 +25,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   };
 
   if (intent === "loadLokte") {
-    const res = await fetch(`${process.env.BACKEND_URL}/config/${shopId}/lokte`, {
-      headers: { Authorization: `Bearer ${sessionToken}` },
-    });
-    const lokte = res.ok ? await res.json() : {};
-    return json({ lokte });
+    const authHeader = { Authorization: `Bearer ${sessionToken}` };
+    const backendUrl = process.env.BACKEND_URL;
+
+    const [lokteRes, devRes] = await Promise.all([
+      fetch(`${backendUrl}/config/${shopId}/lokte`, { headers: authHeader }),
+      fetch(`${backendUrl}/config/${shopId}/dev_testing`, { headers: authHeader }),
+    ]);
+
+    const lokte = lokteRes.ok ? await lokteRes.json() : {};
+    const devCfg = devRes.ok
+      ? (await devRes.json() as { general?: { force_not_configured?: unknown } })
+      : {};
+    const devForceNotConfigured = Number(devCfg?.general?.force_not_configured) === 1;
+
+    return json({ lokte, devForceNotConfigured });
   }
 
   return json({});
@@ -80,6 +94,23 @@ const SUGGESTED_QUESTIONS: SuggestedQuestion[] = [
   },
 ];
 
+/** Animated "Thinking..." indicator — dots cycle 0→3 every 500ms. */
+function ThinkingDots() {
+  const [dotCount, setDotCount] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setDotCount((n) => (n + 1) % 4), 500);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <span>
+      Thinking
+      <span style={{ display: "inline-block", width: "1.6ch", textAlign: "left" }}>
+        {".".repeat(dotCount)}
+      </span>
+    </span>
+  );
+}
+
 export default function AssistantPage() {
   const { shopId } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
@@ -87,13 +118,15 @@ export default function AssistantPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const fetcher = useFetcher<ChatApiResponse>();
-  const configFetcher = useFetcher<{ lokte: LokteConfig }>();
+  const configFetcher = useFetcher<{ lokte: LokteConfig; devForceNotConfigured: boolean }>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
 
   const lokteConfig: LokteConfig | null = (configFetcher.data?.lokte as LokteConfig) ?? null;
-  const configured = isLokteConfigured(lokteConfig);
+  const devForceNotConfigured = Boolean(configFetcher.data?.devForceNotConfigured);
+  // Dev flag (from 🧪 Dev / Testing config section) overrides real config check
+  const configured = !devForceNotConfigured && isLokteConfigured(lokteConfig);
   const configChecked = configFetcher.state === "idle" && configFetcher.data !== undefined;
 
   const isLoading = fetcher.state !== "idle";
@@ -290,14 +323,80 @@ export default function AssistantPage() {
         color: theme.colors.textPrimary,
       }}
     >
-      {/* ── Not-configured banner ── */}
+      {/* ── Not-configured notice ── */}
       {configChecked && !configured && (
-        <div style={{ flexShrink: 0, padding: `${theme.spacing.sm} ${theme.spacing.lg}` }}>
-          <Banner tone="warning">
-            Lokte integration is not set up.{" "}
-            <Link url="/app/configuration">Go to Configuration</Link> to enable it and
-            enter your API key and User ID.
-          </Banner>
+        <div
+          style={{
+            flexShrink: 0,
+            padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: theme.spacing.md,
+              padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+              background: theme.colors.surface,
+              border: `1px solid ${theme.colors.brand}44`,
+              borderLeft: `3px solid ${theme.colors.brand}`,
+              borderRadius: theme.radius.button,
+              boxShadow: theme.shadows.bubble,
+            }}
+          >
+            {/* Warning icon in brand amber */}
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke={theme.colors.brand}
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ flexShrink: 0 }}
+            >
+              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <span
+                style={{
+                  fontSize: theme.typography.body,
+                  color: theme.colors.textPrimary,
+                  fontWeight: 500,
+                }}
+              >
+                Lokte integration is not set up.
+              </span>
+              <span
+                style={{
+                  fontSize: theme.typography.body,
+                  color: theme.colors.textSecondary,
+                  marginLeft: theme.spacing.xs,
+                }}
+              >
+                Enable it and add your API key and User ID in
+              </span>
+              <a
+                href="/app/configuration"
+                style={{
+                  marginLeft: theme.spacing.xs,
+                  fontSize: theme.typography.body,
+                  color: theme.colors.brand,
+                  fontWeight: 500,
+                  textDecoration: "none",
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.textDecoration = "underline"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.textDecoration = "none"; }}
+              >
+                Configuration →
+              </a>
+            </div>
+          </div>
         </div>
       )}
 
@@ -636,8 +735,7 @@ export default function AssistantPage() {
                     fontSize: theme.typography.body,
                   }}
                 >
-                  <Spinner size="small" />
-                  Thinking…
+                  <ThinkingDots />
                 </div>
               </div>
             )}
