@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { useFetcher, useLoaderData } from "@remix-run/react";
+import { createPortal } from "react-dom";
+import { useFetcher, useLoaderData, useNavigate } from "@remix-run/react";
 import { authenticate } from "~/shopify.server";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
@@ -294,7 +295,7 @@ function MarkdownLink({
         {label}
       </a>
 
-      {isHovered && (
+      {isHovered && typeof document !== "undefined" && createPortal(
         <div
           style={{
             ...popupStyle,
@@ -305,6 +306,7 @@ function MarkdownLink({
             boxShadow: rl.popupShadow,
             padding: rl.popupPadding,
             pointerEvents: "none",
+            fontFamily: theme.typography.fontFamily,
           }}
         >
           {doc?.title ? (
@@ -349,7 +351,8 @@ function MarkdownLink({
               Updated {updatedDate}
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </span>
   );
@@ -557,7 +560,7 @@ function AssistantMarkdown({ content, documents }: { content: string; documents:
 export default function AssistantPage() {
   const { shopId } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
-
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const fetcher = useFetcher<ChatApiResponse>();
@@ -769,7 +772,6 @@ export default function AssistantPage() {
         background: theme.colors.pageBackground,
         fontFamily: theme.typography.fontFamily,
         color: theme.colors.textPrimary,
-        margin: "-8px", // counteract body padding to use full viewport width
       }}
     >
       {/* ── Not-configured notice ── */}
@@ -830,20 +832,24 @@ export default function AssistantPage() {
               >
                 Enable it and add your API key and User ID in
               </span>
-              <a
-                href="/app/configuration"
+              <button
+                onClick={() => navigate("/app/configuration")}
                 style={{
                   marginLeft: theme.spacing.xs,
                   fontSize: theme.typography.body,
                   color: theme.colors.brand,
                   fontWeight: 500,
                   textDecoration: "none",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.textDecoration = "underline"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.textDecoration = "none"; }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.textDecoration = "underline"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.textDecoration = "none"; }}
               >
                 Configuration →
-              </a>
+              </button>
             </div>
           </div>
         </div>
