@@ -94,6 +94,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  const data = await response.json() as { answer?: unknown };
-  return json({ reply: String(data.answer ?? "") });
+  const data = await response.json() as { answer?: unknown; documents?: unknown };
+  return json({
+    reply: String(data.answer ?? ""),
+    documents: Array.isArray(data.documents) ? data.documents : [],
+  });
 };

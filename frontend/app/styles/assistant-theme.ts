@@ -80,4 +80,31 @@ export const assistantTheme = {
   transitions: {
     fast: "0.15s",
   },
+  resourceLink: {
+    /** Badge pill */
+    badgeBg: "#eaeaea",
+    badgeBgHover: "#111827",
+    badgeText: "#111827",
+    badgeTextHover: "#ffffff",
+    badgeFontSize: "10px",
+    badgeFontWeight: "500",
+    badgePaddingX: "4px",
+    badgePaddingY: "0px",
+    badgeBorderRadius: "6px",
+    badgeLetterSpacing: "0.01em",
+    /** Hover popup card */
+    popupBg: "var(--p-color-bg-surface, #ffffff)",
+    popupBorder: "var(--p-color-border, #c9cccf)",
+    popupShadow: "0 4px 16px rgba(0,0,0,0.12)",
+    popupWidth: "260px",
+    popupBorderRadius: "10px",
+    popupPadding: "12px 14px",
+    popupTitleSize: "13px",
+    popupTitleWeight: "600",
+    popupTitleColor: "var(--p-color-text, #525252)",
+    popupExcerptSize: "12px",
+    popupExcerptColor: "var(--p-color-text-secondary, #6d7175)",
+    popupMetaSize: "11px",
+    popupMetaColor: "var(--p-color-text-disabled, #8c9196)",
+  },
 } as const;

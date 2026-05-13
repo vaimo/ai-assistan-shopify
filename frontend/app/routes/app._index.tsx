@@ -53,9 +53,18 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   isError?: boolean;
+  documents?: SourceDocument[];
 }
 
-type ChatApiResponse = { reply: string } | { error: string };
+interface SourceDocument {
+  title: string;
+  link: string;
+  source_type: string;
+  blurb: string;
+  updated_at: string | null;
+}
+
+type ChatApiResponse = { reply: string; documents: SourceDocument[] } | { error: string };
 
 interface LokteConfig {
   general?: {
@@ -114,8 +123,62 @@ function ThinkingDots() {
   );
 }
 
-function MarkdownLink({ href, children }: { href?: string; children: React.ReactNode }) {
+/** Derive a display label from a source_type string or URL hostname.
+ *  Returns null if the URL cannot be mapped to a known resource. */
+function deriveResourceLabel(sourceType: string, href: string): string | null {
+  if (sourceType) {
+    // e.g. "confluence" → "Confluence", "google_drive" → "Google Drive"
+    return sourceType
+      .split(/[_\-]/)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  }
+  try {
+    const hostname = new URL(href).hostname.replace(/^www\./, "");
+    if (/atlassian\.net/.test(hostname)) return "Confluence";
+    if (/slack\.com/.test(hostname)) return "Slack";
+    if (/notion\.so/.test(hostname)) return "Notion";
+    if (/docs\.google/.test(hostname)) return "Google Docs";
+    if (/drive\.google/.test(hostname)) return "Google Drive";
+    if (/github\.com/.test(hostname)) return "GitHub";
+    if (/sharepoint\.com/.test(hostname)) return "SharePoint";
+    if (/confluence\./.test(hostname)) return "Confluence";
+    if (/jira\./.test(hostname)) return "Jira";
+    // Generic: use second-level domain as label
+    const parts = hostname.split(".");
+    return parts.length >= 2
+      ? parts[parts.length - 2].charAt(0).toUpperCase() + parts[parts.length - 2].slice(1)
+      : hostname;
+  } catch {
+    return null;
+  }
+}
+
+/** Format an ISO / numeric timestamp to "MM/DD/YYYY". */
+function formatUpdatedAt(raw: string | null): string | null {
+  if (!raw) return null;
+  // Unix epoch in seconds (Danswer/Onyx sends floats like 1727740800.0)
+  const asNum = parseFloat(raw);
+  const date = Number.isFinite(asNum) && asNum > 1e9
+    ? new Date(asNum * 1000)
+    : new Date(raw);
+  if (isNaN(date.getTime())) return null;
+  return date.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" });
+}
+
+function MarkdownLink({
+  href,
+  children,
+  documents,
+}: {
+  href?: string;
+  children: React.ReactNode;
+  documents: SourceDocument[];
+}) {
   const [isHovered, setIsHovered] = useState(false);
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
+  const badgeRef = useRef<HTMLAnchorElement>(null);
+
   const normalizedHref = href?.trim() ?? "";
   const hasSafeScheme = /^(https?:|mailto:|tel:)/i.test(normalizedHref);
   const isSafeRelative = /^(\/|#|\?)/.test(normalizedHref);
@@ -125,28 +188,174 @@ function MarkdownLink({ href, children }: { href?: string; children: React.React
     return <span>{children}</span>;
   }
 
+  // Try to find matched document metadata by URL — use progressive fuzzy matching
+  const doc = documents.find((d) => {
+    try {
+      const docUrl = new URL(d.link);
+      const linkUrl = new URL(safeHref);
+
+      // 1. Exact match (normalized)
+      if (docUrl.href === linkUrl.href) return true;
+
+      // 2. Match ignoring query string and hash (origin + pathname only)
+      const docBase = docUrl.origin + docUrl.pathname.replace(/\/+$/, "");
+      const linkBase = linkUrl.origin + linkUrl.pathname.replace(/\/+$/, "");
+      if (docBase === linkBase) return true;
+
+      // 3. Match after decoding percent-encoding (handles %20 vs + in Confluence paths)
+      if (decodeURIComponent(docBase) === decodeURIComponent(linkBase)) return true;
+
+      return false;
+    } catch {
+      return d.link === safeHref;
+    }
+  });
+
+  // Derive the resource label — from doc metadata first, then URL hostname
+  const label = deriveResourceLabel(doc?.source_type ?? "", safeHref);
+
+  // If we can't derive any label for this URL, render as plain amber link
+  if (!label) {
+    return (
+      <a
+        href={safeHref}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        style={{
+          color: isHovered ? theme.colors.linkHover : theme.colors.link,
+          textDecoration: isHovered ? "underline" : "none",
+          textUnderlineOffset: "2px",
+          fontWeight: 500,
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
+        }}
+      >
+        {children}
+      </a>
+    );
+  }
+
+  const updatedDate = formatUpdatedAt(doc?.updated_at ?? null);
+  const excerpt = doc?.blurb
+    ? doc.blurb.length > 120 ? doc.blurb.slice(0, 117) + "…" : doc.blurb
+    : null;
+
+  const rl = theme.resourceLink;
+
+  // Position popup near badge on hover
+  const handleMouseEnter = () => {
+    if (badgeRef.current) {
+      const rect = badgeRef.current.getBoundingClientRect();
+      const popupWidth = 260;
+      let left = rect.left;
+      if (left + popupWidth > window.innerWidth - 8) {
+        left = window.innerWidth - popupWidth - 8;
+      }
+      setPopupStyle({
+        position: "fixed",
+        top: rect.bottom + 6,
+        left,
+        zIndex: 9999,
+      });
+    }
+    setIsHovered(true);
+  };
+
   return (
-    <a
-      href={safeHref}
-      target="_blank"
-      rel="noopener noreferrer nofollow"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      style={{
-        color: isHovered ? theme.colors.linkHover : theme.colors.link,
-        textDecoration: isHovered ? "underline" : "none",
-        textUnderlineOffset: "2px",
-        fontWeight: 500,
-        overflowWrap: "anywhere",
-        wordBreak: "break-word",
-      }}
-    >
-      {children}
-    </a>
+    <span style={{ position: "relative", display: "inline" }}>
+      <a
+        ref={badgeRef}
+        href={safeHref}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={() => setIsHovered(false)}
+        style={{
+          display: "inline-block",
+          verticalAlign: "middle",
+          marginLeft: "4px",
+          padding: `${rl.badgePaddingY} ${rl.badgePaddingX}`,
+          borderRadius: rl.badgeBorderRadius,
+          background: isHovered ? rl.badgeBgHover : rl.badgeBg,
+          color: isHovered ? rl.badgeTextHover : rl.badgeText,
+          fontSize: rl.badgeFontSize,
+          fontWeight: rl.badgeFontWeight,
+          letterSpacing: rl.badgeLetterSpacing,
+          lineHeight: 1.4,
+          textDecoration: "none",
+          cursor: "pointer",
+          transition: `background ${theme.transitions.fast}`,
+          whiteSpace: "nowrap",
+          marginBottom: "2px",
+        }}
+      >
+        {label}
+      </a>
+
+      {isHovered && (
+        <div
+          style={{
+            ...popupStyle,
+            width: rl.popupWidth,
+            background: rl.popupBg,
+            border: `1px solid ${rl.popupBorder}`,
+            borderRadius: rl.popupBorderRadius,
+            boxShadow: rl.popupShadow,
+            padding: rl.popupPadding,
+            pointerEvents: "none",
+          }}
+        >
+          {doc?.title ? (
+            <div
+              style={{
+                fontSize: rl.popupTitleSize,
+                fontWeight: rl.popupTitleWeight,
+                color: rl.popupTitleColor,
+                marginBottom: excerpt || updatedDate ? "6px" : 0,
+                lineHeight: 1.35,
+              }}
+            >
+              {doc.title}
+            </div>
+          ) : (
+            /* Fallback: show truncated URL so the popup is never empty */
+            <div
+              style={{
+                fontSize: rl.popupExcerptSize,
+                color: rl.popupExcerptColor,
+                lineHeight: 1.45,
+                wordBreak: "break-all",
+              }}
+            >
+              {safeHref.length > 80 ? safeHref.slice(0, 77) + "…" : safeHref}
+            </div>
+          )}
+          {excerpt && (
+            <div
+              style={{
+                fontSize: rl.popupExcerptSize,
+                color: rl.popupExcerptColor,
+                lineHeight: 1.45,
+                marginBottom: updatedDate ? "6px" : 0,
+              }}
+            >
+              {excerpt}
+            </div>
+          )}
+          {updatedDate && (
+            <div style={{ fontSize: rl.popupMetaSize, color: rl.popupMetaColor }}>
+              Updated {updatedDate}
+            </div>
+          )}
+        </div>
+      )}
+    </span>
   );
 }
 
-function AssistantMarkdown({ content }: { content: string }) {
+function AssistantMarkdown({ content, documents }: { content: string; documents: SourceDocument[] }) {
   return (
     <div
       style={{
@@ -159,7 +368,7 @@ function AssistantMarkdown({ content }: { content: string }) {
         remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
           a: ({ href, children }: any) => (
-            <MarkdownLink href={href}>{children}</MarkdownLink>
+            <MarkdownLink href={href} documents={documents}>{children}</MarkdownLink>
           ),
           p: ({ children }: any) => (
             <p style={{ margin: 0, marginBottom: theme.spacing.sm }}>{children}</p>
@@ -424,7 +633,12 @@ export default function AssistantPage() {
       if ("reply" in data) {
         setMessages((prev) => [
           ...prev,
-          { id: crypto.randomUUID(), role: "assistant", content: data.reply },
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: data.reply,
+            documents: data.documents ?? [],
+          },
         ]);
       } else if ("error" in data) {
         setMessages((prev) => [
@@ -926,7 +1140,7 @@ export default function AssistantPage() {
                       <span style={{ marginRight: theme.spacing.xs }}>⚠️</span>
                     )}
                     {msg.role === "assistant" && !msg.isError ? (
-                      <AssistantMarkdown content={msg.content} />
+                      <AssistantMarkdown content={msg.content} documents={msg.documents ?? []} />
                     ) : (
                       msg.content
                     )}
