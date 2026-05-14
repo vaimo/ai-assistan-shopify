@@ -66,8 +66,12 @@ describe('LokteService', () => {
   describe('askQuestion — Lokte API calls', () => {
     beforeEach(() => setupHappyConfig());
 
-    it('returns answer text on success', async () => {
-      const mockFetch = jest
+    it('returns answer and empty documents on success', async () => {
+      const ndjson = [
+        JSON.stringify({ obj: { type: 'message_delta', content: 'The answer is 42' } }),
+      ].join('\n');
+
+      global.fetch = jest
         .fn()
         .mockResolvedValueOnce({
           ok: true,
@@ -75,17 +79,21 @@ describe('LokteService', () => {
         } as unknown as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: () => Promise.resolve({ answer: 'The answer is 42' }),
+          text: () => Promise.resolve(ndjson),
         } as unknown as Response);
-
-      global.fetch = mockFetch;
 
       const sut = makeSut();
       const result = await sut.askQuestion('shop.myshopify.com', 'What is the answer?');
-      expect(result).toBe('The answer is 42');
+      expect(result.answer).toBe('The answer is 42');
+      expect(result.documents).toEqual([]);
     });
 
-    it('joins answer_pieces when answer field is absent', async () => {
+    it('joins message_delta pieces into answer', async () => {
+      const ndjson = [
+        JSON.stringify({ obj: { type: 'message_delta', content: 'Hello' } }),
+        JSON.stringify({ obj: { type: 'message_delta', content: ' world' } }),
+      ].join('\n');
+
       global.fetch = jest
         .fn()
         .mockResolvedValueOnce({
@@ -94,12 +102,92 @@ describe('LokteService', () => {
         } as unknown as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: () => Promise.resolve({ answer_pieces: ['Hello', ' ', 'world'] }),
+          text: () => Promise.resolve(ndjson),
         } as unknown as Response);
 
       const sut = makeSut();
       const result = await sut.askQuestion('shop.myshopify.com', 'Hi?');
-      expect(result).toBe('Hello world');
+      expect(result.answer).toBe('Hello world');
+    });
+
+    it('extracts documents from docs_snapshot event (wrapped obj format)', async () => {
+      const ndjson = [
+        JSON.stringify({
+          obj: {
+            type: 'docs_snapshot',
+            top_documents: [
+              {
+                link: 'https://company.atlassian.net/wiki/page1',
+                semantic_identifier: 'Page Title',
+                source_type: 'confluence',
+                blurb: 'Short excerpt about this page.',
+                updated_at: '2025-10-01T00:00:00Z',
+              },
+            ],
+          },
+        }),
+        JSON.stringify({ obj: { type: 'message_delta', content: 'Answer with link.' } }),
+      ].join('\n');
+
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'sess-3' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(ndjson),
+        } as unknown as Response);
+
+      const sut = makeSut();
+      const result = await sut.askQuestion('shop.myshopify.com', 'Find docs');
+      expect(result.answer).toBe('Answer with link.');
+      expect(result.documents).toHaveLength(1);
+      expect(result.documents[0]).toMatchObject({
+        title: 'Page Title',
+        link: 'https://company.atlassian.net/wiki/page1',
+        source_type: 'confluence',
+        blurb: 'Short excerpt about this page.',
+      });
+    });
+
+    it('extracts documents from flat top_documents event (Danswer/Onyx format)', async () => {
+      const ndjson = [
+        JSON.stringify({
+          top_documents: [
+            {
+              link: 'https://app.slack.com/archives/C123/p456',
+              semantic_identifier: 'Slack message title',
+              source_type: 'slack',
+              blurb: 'Slack excerpt.',
+              updated_at: 1727740800,
+            },
+          ],
+        }),
+        JSON.stringify({ answer_piece: 'Flat answer.' }),
+      ].join('\n');
+
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'sess-5' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(ndjson),
+        } as unknown as Response);
+
+      const sut = makeSut();
+      const result = await sut.askQuestion('shop.myshopify.com', 'Slack question');
+      expect(result.answer).toBe('Flat answer.');
+      expect(result.documents).toHaveLength(1);
+      expect(result.documents[0]).toMatchObject({
+        title: 'Slack message title',
+        link: 'https://app.slack.com/archives/C123/p456',
+        source_type: 'slack',
+      });
     });
 
     it('throws BadGatewayException when create-chat-session returns non-ok status', async () => {
@@ -119,7 +207,7 @@ describe('LokteService', () => {
         .fn()
         .mockResolvedValueOnce({
           ok: true,
-          json: () => Promise.resolve({ id: 'sess-3' }),
+          json: () => Promise.resolve({ id: 'sess-4' }),
         } as unknown as Response)
         .mockResolvedValueOnce({
           ok: false,

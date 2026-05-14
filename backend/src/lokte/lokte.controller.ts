@@ -8,7 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ShopifySessionGuard } from '../auth/guards/shopify-session.guard';
-import { LokteService } from './lokte.service';
+import { LokteService, SourceDocument } from './lokte.service';
 import { AskQuestionDto } from './dtos/ask-question.dto';
 
 @Controller('lokte')
@@ -22,8 +22,8 @@ export class LokteController {
   async askQuestion(
     @Param('shopId') shopId: string,
     @Body() dto: AskQuestionDto,
-  ): Promise<{ answer: string }> {
-    const answer = await this.lokteService.askQuestion(shopId, dto.question);
-    return { answer };
+  ): Promise<{ answer: string; documents: SourceDocument[] }> {
+    const result = await this.lokteService.askQuestion(shopId, dto.question);
+    return result;
   }
 }
