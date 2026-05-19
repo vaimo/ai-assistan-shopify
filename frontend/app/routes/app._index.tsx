@@ -581,6 +581,7 @@ export default function AssistantPage() {
   const shopify = useAppBridge();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [historyReady, setHistoryReady] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const fetcher = useFetcher<ChatApiResponse>();
   const clearFetcher = useFetcher<{ cleared: boolean }>();
@@ -618,7 +619,7 @@ export default function AssistantPage() {
 
   // Hydrate messages from history once loaded
   useEffect(() => {
-    if (historyFetcher.data?.messages) {
+    if (historyFetcher.data?.messages !== undefined) {
       setMessages(
         historyFetcher.data.messages.map((m) => ({
           id: m.id,
@@ -627,6 +628,7 @@ export default function AssistantPage() {
           isError: m.isError,
         })),
       );
+      setHistoryReady(true);
     }
   }, [historyFetcher.data]);
 
@@ -910,7 +912,7 @@ export default function AssistantPage() {
       )}
 
       {/* ── Chat header — only shown in active conversation ── */}
-      {hasMessages && (
+      {hasMessages && historyReady && (
         <div
           style={{
             flexShrink: 0,
@@ -1010,7 +1012,29 @@ export default function AssistantPage() {
           minHeight: 0,
         }}
       >
-        {!hasMessages ? (
+        {!historyReady ? (
+          /* ── Spinner while history is loading ── */
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+            <div
+              style={{
+                width: "32px",
+                height: "32px",
+                borderRadius: "50%",
+                border: `2px solid ${theme.colors.brand}`,
+                borderTopColor: theme.colors.textSecondary,
+                animation: "spin 0.8s linear infinite",
+              }}
+            />
+          </div>
+        ) : !hasMessages ? (
           /* ── Empty state: 3-row grid matching expected layout ── */
           <div
             style={{
@@ -1265,7 +1289,7 @@ export default function AssistantPage() {
 
             <div ref={messagesEndRef} />
           </div>
-        )}
+        ) /* end !hasMessages ternary */ }
       </div>
 
       {/* ── Sticky input bar — only shown once conversation starts ── */}
