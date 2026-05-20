@@ -102,9 +102,21 @@ export class LokteService {
     if (existing) return existing;
 
     const lokteSessionId = await this.createLokteSession(token, personaId);
-    return this.sessionRepo.save(
-      this.sessionRepo.create({ shopId, userId, lokteSessionId, lastAssistantMsgId: null }),
-    );
+    try {
+      return await this.sessionRepo.save(
+        this.sessionRepo.create({ shopId, userId, lokteSessionId, lastAssistantMsgId: null }),
+      );
+    } catch (err: unknown) {
+      // Unique constraint violation — another concurrent request already created the session.
+      // Discard the orphaned Lokte session and return the winner's row.
+      const isUniqueViolation =
+        err instanceof Error && (err as NodeJS.ErrnoException & { code?: string }).code === '23505';
+      if (isUniqueViolation) {
+        const winner = await this.sessionRepo.findOne({ where: { shopId, userId } });
+        if (winner) return winner;
+      }
+      throw err;
+    }
   }
 
   private async createLokteSession(token: string, personaId: string): Promise<string> {
