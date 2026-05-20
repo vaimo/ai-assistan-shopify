@@ -11,12 +11,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ShopifySessionGuard } from '../auth/guards/shopify-session.guard';
+import { ShopParamGuard } from '../auth/guards/shop-param.guard';
 import { LokteService, SourceDocument } from './lokte.service';
 import { AskQuestionDto } from './dtos/ask-question.dto';
 import { ChatMessage } from './entities/chat-message.entity';
 
 @Controller('lokte')
-@UseGuards(ShopifySessionGuard)
+@UseGuards(ShopifySessionGuard, ShopParamGuard)
 export class LokteController {
   constructor(private readonly lokteService: LokteService) {}
 

@@ -32,15 +32,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     userId: string;
   };
 
+  // Prevent a tampered request body from targeting a different shop
+  if (shopId && shopId !== session.shop) {
+    return json({ error: "Forbidden" }, { status: 403 });
+  }
+
   if (intent === "clearHistory") {
-    await clearChatHistory(shopId, userId, sessionToken);
+    await clearChatHistory(session.shop, userId, sessionToken);
     return json({ cleared: true });
   }
 
   if (intent === "loadHistory") {
     const backendUrl = process.env.BACKEND_URL;
     const res = await fetch(
-      `${backendUrl}/lokte/${shopId}/history?userId=${encodeURIComponent(userId)}`,
+      `${backendUrl}/lokte/${session.shop}/history?userId=${encodeURIComponent(userId)}`,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
     const messages = res.ok ? await res.json() : [];
@@ -52,8 +57,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const backendUrl = process.env.BACKEND_URL;
 
     const [lokteRes, devRes] = await Promise.all([
-      fetch(`${backendUrl}/config/${shopId}/lokte`, { headers: authHeader }),
-      fetch(`${backendUrl}/config/${shopId}/dev_testing`, { headers: authHeader }),
+      fetch(`${backendUrl}/config/${session.shop}/lokte`, { headers: authHeader }),
+      fetch(`${backendUrl}/config/${session.shop}/dev_testing`, { headers: authHeader }),
     ]);
 
     const lokte = lokteRes.ok ? await lokteRes.json() : {};
