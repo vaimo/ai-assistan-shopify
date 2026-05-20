@@ -95,27 +95,15 @@ export interface ChatMessageRecord {
 }
 
 /**
- * Fetches the chat message history for a specific shop + user.
- */
-export async function getChatHistory(
-  shopId: string,
-  userId: string,
-): Promise<ChatMessageRecord[]> {
-  return makeBackendRequest<ChatMessageRecord[]>(
-    `/lokte/${shopId}/history?userId=${encodeURIComponent(userId)}`,
-  );
-}
-
-/**
- * Clears the chat history and Lokte session for a specific shop + user.
+ * Clears the chat history and Lokte session for the authenticated user.
+ * User identity is derived from the Shopify session JWT on the backend.
  */
 export async function clearChatHistory(
   shopId: string,
-  userId: string,
   sessionToken: string,
 ): Promise<void> {
   const backendUrl = process.env.BACKEND_URL || 'http://localhost:3004';
-  const url = `${backendUrl}/lokte/${shopId}/history?userId=${encodeURIComponent(userId)}`;
+  const url = `${backendUrl}/lokte/${shopId}/history`;
   const response = await fetch(url, {
     method: 'DELETE',
     headers: {

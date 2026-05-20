@@ -25,7 +25,7 @@ export class ShopifySessionGuard implements CanActivate {
   constructor(private readonly configService: ConfigService) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest<Request & { shopDomain?: string }>();
+    const request = context.switchToHttp().getRequest<Request & { shopDomain?: string; shopifyUserId?: string }>();
     const secret = this.configService.getOrThrow<string>('SHOPIFY_API_SECRET');
 
     const authHeader = request.headers['authorization'];
@@ -77,9 +77,10 @@ export class ShopifySessionGuard implements CanActivate {
       throw new UnauthorizedException('Invalid dest claim');
     }
 
-    // Extract shop domain from dest
+    // Extract shop domain from dest and user id from sub
     const destUrl = new URL(payload.dest);
     request.shopDomain = destUrl.hostname;
+    request.shopifyUserId = payload.sub || 'default';
 
     return true;
   }

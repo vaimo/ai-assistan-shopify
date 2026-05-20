@@ -108,10 +108,13 @@ export class LokteService {
       );
     } catch (err: unknown) {
       // Unique constraint violation — another concurrent request already created the session.
-      // Discard the orphaned Lokte session and return the winner's row.
+      // Clean up the orphaned Lokte session and return the winner's row.
       const isUniqueViolation =
         err instanceof Error && (err as NodeJS.ErrnoException & { code?: string }).code === '23505';
       if (isUniqueViolation) {
+        this.deleteLokteSession(token, lokteSessionId).catch((e) =>
+          this.logger.warn(`Failed to clean up orphaned Lokte session ${lokteSessionId}`, e),
+        );
         const winner = await this.sessionRepo.findOne({ where: { shopId, userId } });
         if (winner) return winner;
       }
