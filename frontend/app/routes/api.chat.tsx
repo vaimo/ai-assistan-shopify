@@ -11,12 +11,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   let message = "";
   let sessionToken = "";
-  let userId = "";
   try {
-    const body = await request.json() as { message?: unknown; sessionToken?: unknown; userId?: unknown };
+    const body = await request.json() as { message?: unknown; sessionToken?: unknown };
     message = typeof body?.message === "string" ? body.message : "";
     sessionToken = typeof body?.sessionToken === "string" ? body.sessionToken : "";
-    userId = typeof body?.userId === "string" ? body.userId : "";
   } catch {
     return json({ error: "Invalid JSON body" }, { status: 400 });
   }
@@ -71,7 +69,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${sessionToken}`,
       },
-      body: JSON.stringify({ question: message, userId }),
+      body: JSON.stringify({ question: message }),
     });
   } catch {
     return json(

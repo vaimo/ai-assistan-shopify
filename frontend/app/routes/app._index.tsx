@@ -19,17 +19,15 @@ import { clearChatHistory, type ChatMessageRecord } from "~/backend.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  const userId = String(session.userId ?? "") || "default";
-  return json({ shopId: session.shop, userId });
+  return json({ shopId: session.shop });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  const { intent, sessionToken, shopId, userId } = await request.json() as {
+  const { intent, sessionToken, shopId } = await request.json() as {
     intent: string;
     sessionToken: string;
     shopId: string;
-    userId: string;
   };
 
   // Prevent a tampered request body from targeting a different shop
@@ -38,14 +36,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "clearHistory") {
-    await clearChatHistory(session.shop, userId, sessionToken);
+    await clearChatHistory(session.shop, sessionToken);
     return json({ cleared: true });
   }
 
   if (intent === "loadHistory") {
     const backendUrl = process.env.BACKEND_URL;
     const res = await fetch(
-      `${backendUrl}/lokte/${session.shop}/history?userId=${encodeURIComponent(userId)}`,
+      `${backendUrl}/lokte/${session.shop}/history`,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
     const messages = res.ok ? await res.json() : [];
@@ -56,18 +54,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const authHeader = { Authorization: `Bearer ${sessionToken}` };
     const backendUrl = process.env.BACKEND_URL;
 
-    const [lokteRes, devRes] = await Promise.all([
+    const [lokteRes, aiAssistantRes, devRes] = await Promise.all([
       fetch(`${backendUrl}/config/${session.shop}/lokte`, { headers: authHeader }),
+      fetch(`${backendUrl}/config/${session.shop}/ai_assistant`, { headers: authHeader }),
       fetch(`${backendUrl}/config/${session.shop}/dev_testing`, { headers: authHeader }),
     ]);
 
     const lokte = lokteRes.ok ? await lokteRes.json() : {};
+    const aiAssistant = aiAssistantRes.ok
+      ? (await aiAssistantRes.json() as { general?: { enable?: unknown } })
+      : {};
     const devCfg = devRes.ok
       ? (await devRes.json() as { general?: { force_not_configured?: unknown } })
       : {};
+    const aiAssistantEnabled = Number(aiAssistant?.general?.enable) === 1;
     const devForceNotConfigured = Number(devCfg?.general?.force_not_configured) === 1;
 
-    return json({ lokte, devForceNotConfigured });
+    return json({ lokte, aiAssistantEnabled, devForceNotConfigured });
   }
 
   return json({});
@@ -582,7 +585,7 @@ function AssistantMarkdown({ content, documents }: { content: string; documents:
 }
 
 export default function AssistantPage() {
-  const { shopId, userId } = useLoaderData<typeof loader>();
+  const { shopId } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -591,16 +594,17 @@ export default function AssistantPage() {
   const fetcher = useFetcher<ChatApiResponse>();
   const clearFetcher = useFetcher<{ cleared: boolean }>();
   const historyFetcher = useFetcher<{ messages: ChatMessageRecord[] }>();
-  const configFetcher = useFetcher<{ lokte: LokteConfig; devForceNotConfigured: boolean }>();
+  const configFetcher = useFetcher<{ lokte: LokteConfig; aiAssistantEnabled: boolean; devForceNotConfigured: boolean }>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
   const lokteConfig: LokteConfig | null = (configFetcher.data?.lokte as LokteConfig) ?? null;
+  const aiAssistantEnabled = configFetcher.data?.aiAssistantEnabled !== false; // true until data arrives (avoid flicker)
   const devForceNotConfigured = Boolean(configFetcher.data?.devForceNotConfigured);
-  // Dev flag (from 🧪 Dev / Testing config section) overrides real config check
-  const configured = !devForceNotConfigured && isLokteConfigured(lokteConfig);
+  // Both AI Assistant AND Lokte must be enabled+configured
+  const configured = !devForceNotConfigured && aiAssistantEnabled && isLokteConfigured(lokteConfig);
   const configChecked = configFetcher.state === "idle" && configFetcher.data !== undefined;
 
   const isLoading = fetcher.state !== "idle";
@@ -615,7 +619,7 @@ export default function AssistantPage() {
         { method: "POST", encType: "application/json" },
       );
       historyFetcher.submit(
-        { intent: "loadHistory", sessionToken, shopId, userId },
+        { intent: "loadHistory", sessionToken, shopId },
         { method: "POST", encType: "application/json" },
       );
     })();
@@ -666,7 +670,7 @@ export default function AssistantPage() {
       const sessionToken = await shopify.idToken();
 
       // fetcher is intentionally omitted from deps — useFetcher() returns a stable reference in Remix v2
-      fetcher.submit(JSON.stringify({ message: trimmed, sessionToken, userId }), {
+      fetcher.submit(JSON.stringify({ message: trimmed, sessionToken }), {
         method: "POST",
         action: "/api/chat",
         encType: "application/json",
@@ -708,10 +712,10 @@ export default function AssistantPage() {
     setMessages([]);
     const sessionToken = await shopify.idToken();
     clearFetcher.submit(
-      JSON.stringify({ intent: "clearHistory", sessionToken, shopId, userId }),
+      JSON.stringify({ intent: "clearHistory", sessionToken, shopId }),
       { method: "POST", encType: "application/json" },
     );
-  }, [confirmClear, shopify, shopId, userId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [confirmClear, shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -745,7 +749,13 @@ export default function AssistantPage() {
           onKeyDown={handleKeyDown}
           onFocus={() => setTextareaFocused(true)}
           onBlur={() => setTextareaFocused(false)}
-          placeholder={configured ? "How can AI Assistant help you today?" : "Configure Lokte integration to start chatting…"}
+          placeholder={
+            configured
+              ? "How can AI Assistant help you today?"
+              : !aiAssistantEnabled
+                ? "AI Assistant is disabled. Enable it in Configuration…"
+                : "Configure Lokte integration to start chatting…"
+          }
           rows={1}
           disabled={inputDisabled}
           style={{
@@ -882,7 +892,9 @@ export default function AssistantPage() {
                   fontWeight: 500,
                 }}
               >
-                Lokte integration is not set up.
+                {!aiAssistantEnabled
+                  ? "AI Assistant is disabled."
+                  : "Lokte integration is not set up."}
               </span>
               <span
                 style={{
@@ -891,7 +903,9 @@ export default function AssistantPage() {
                   marginLeft: theme.spacing.xs,
                 }}
               >
-                Enable it and add your API key and User ID in
+                {!aiAssistantEnabled
+                  ? "Enable it in"
+                  : "Enable it and add your API key and User ID in"}
               </span>
               <button
                 onClick={() => navigate("/app/configuration")}
