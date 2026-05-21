@@ -327,6 +327,8 @@ function MarkdownLink({
           style={{
             ...popupStyle,
             width: rl.popupWidth,
+            maxWidth: rl.popupWidth,
+            overflow: "hidden",
             background: rl.popupBg,
             border: `1px solid ${rl.popupBorder}`,
             borderRadius: rl.popupBorderRadius,
@@ -344,6 +346,12 @@ function MarkdownLink({
                 color: rl.popupTitleColor,
                 marginBottom: excerpt || updatedDate ? "6px" : 0,
                 lineHeight: 1.35,
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                WebkitBoxOrient: "vertical" as any,
+                overflow: "hidden",
+                wordBreak: "break-word",
               }}
             >
               {doc.title}
@@ -355,10 +363,12 @@ function MarkdownLink({
                 fontSize: rl.popupExcerptSize,
                 color: rl.popupExcerptColor,
                 lineHeight: 1.45,
-                wordBreak: "break-all",
+                overflow: "hidden",
+                whiteSpace: "nowrap",
+                textOverflow: "ellipsis",
               }}
             >
-              {safeHref.length > 80 ? safeHref.slice(0, 77) + "…" : safeHref}
+              {safeHref}
             </div>
           )}
           {excerpt && (
