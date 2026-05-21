@@ -328,7 +328,6 @@ function MarkdownLink({
             ...popupStyle,
             width: rl.popupWidth,
             maxWidth: rl.popupWidth,
-            overflow: "hidden",
             background: rl.popupBg,
             border: `1px solid ${rl.popupBorder}`,
             borderRadius: rl.popupBorderRadius,
