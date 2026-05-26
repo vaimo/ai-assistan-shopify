@@ -608,6 +608,11 @@ export default function AssistantPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  // true when the user navigated away while the AI was processing and we're polling for the result
+  const [isRestoredThinking, setIsRestoredThinking] = useState(false);
+  // Ref mirror so effects can read the current value without re-running on every state change
+  const isRestoredThinkingRef = useRef(false);
+  const pendingQuestionRef = useRef<string | null>(null);
 
   const lokteConfig: LokteConfig | null = (configFetcher.data?.lokte as LokteConfig) ?? null;
   const aiAssistantEnabled = configFetcher.data?.aiAssistantEnabled !== false; // true until data arrives (avoid flicker)
@@ -616,7 +621,7 @@ export default function AssistantPage() {
   const configured = !devForceNotConfigured && aiAssistantEnabled && isLokteConfigured(lokteConfig);
   const configChecked = configFetcher.state === "idle" && configFetcher.data !== undefined;
 
-  const isLoading = fetcher.state !== "idle";
+  const isLoading = fetcher.state !== "idle" || isRestoredThinking;
   const hasMessages = messages.length > 0;
 
   // Load Lokte config + chat history on mount
@@ -635,20 +640,90 @@ export default function AssistantPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shopId]);
 
-  // Hydrate messages from history once loaded
+  // Sync ref so effects can read isRestoredThinking without stale closures
+  useEffect(() => { isRestoredThinkingRef.current = isRestoredThinking; }, [isRestoredThinking]);
+
+  // Hydrate messages from history. Runs on first load and on every poll while waiting for AI.
   useEffect(() => {
-    if (historyFetcher.data?.messages !== undefined) {
-      setMessages(
-        historyFetcher.data.messages.map((m) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: m.content,
-          isError: m.isError,
-        })),
-      );
+    if (historyFetcher.data?.messages === undefined) return;
+
+    const msgs: ChatMessage[] = historyFetcher.data.messages.map((m) => ({
+      id: m.id,
+      role: m.role as "user" | "assistant",
+      content: m.content,
+      isError: m.isError,
+    }));
+
+    if (!historyReady) {
+      // ── First load after mount ─────────────────────────────────────────────
+      let pendingMsg: ChatMessage | null = null;
+      try {
+        const raw = sessionStorage.getItem("ai-chat-pending");
+        if (raw) {
+          const pending = JSON.parse(raw) as { message: string; shopId: string; ts: number };
+          const ageOk = Date.now() - (pending.ts ?? 0) < 10 * 60 * 1000;
+          if (pending.shopId === shopId && ageOk) {
+            const lastUserInMsgs = [...msgs].reverse().find((m) => m.role === "user");
+            const alreadyInHistory = lastUserInMsgs?.content === pending.message;
+            const successInHistory = alreadyInHistory && msgs[msgs.length - 1]?.role === "assistant";
+
+            if (successInHistory) {
+              // History already has the complete exchange (AI responded before we navigated back)
+              sessionStorage.removeItem("ai-chat-pending");
+            } else {
+              // Answer not yet in history — restore user bubble and start polling
+              pendingQuestionRef.current = pending.message;
+              isRestoredThinkingRef.current = true;
+              setIsRestoredThinking(true);
+              if (!alreadyInHistory) {
+                pendingMsg = { id: "pending-user", role: "user", content: pending.message };
+              }
+            }
+          } else {
+            sessionStorage.removeItem("ai-chat-pending");
+          }
+        }
+      } catch { /* ignore sessionStorage errors */ }
+
+      setMessages(pendingMsg ? [...msgs, pendingMsg] : msgs);
       setHistoryReady(true);
+
+    } else if (isRestoredThinkingRef.current) {
+      // ── Poll result — check whether the AI answer has landed in history ────
+      const lastUserInMsgs = [...msgs].reverse().find((m) => m.role === "user");
+      const answerInHistory =
+        lastUserInMsgs?.content === pendingQuestionRef.current &&
+        msgs[msgs.length - 1]?.role === "assistant";
+
+      if (answerInHistory) {
+        setMessages(msgs);
+        isRestoredThinkingRef.current = false;
+        setIsRestoredThinking(false);
+        pendingQuestionRef.current = null;
+        try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
+      }
+      // If not yet — do nothing; the polling effect will schedule the next fetch
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyFetcher.data]);
+
+  // Poll history while waiting for a restored-thinking answer
+  useEffect(() => {
+    if (!isRestoredThinking || !historyReady || historyFetcher.state !== "idle") return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      const sessionToken = await shopify.idToken();
+      if (!cancelled) {
+        historyFetcher.submit(
+          { intent: "loadHistory", sessionToken, shopId },
+          { method: "POST", encType: "application/json" },
+        );
+      }
+    }, 2500);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRestoredThinking, historyReady, historyFetcher.state]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -676,6 +751,13 @@ export default function AssistantPage() {
       ]);
       setInputValue("");
 
+      // Persist BEFORE the async idToken call — if the user navigates during idToken(),
+      // the JS context is destroyed and nothing after the await would execute.
+      try {
+        const payload = JSON.stringify({ message: trimmed, shopId, ts: Date.now() });
+        sessionStorage.setItem("ai-chat-pending", payload);
+      } catch { /* ignore sessionStorage errors */ }
+
       const sessionToken = await shopify.idToken();
 
       // fetcher is intentionally omitted from deps — useFetcher() returns a stable reference in Remix v2
@@ -692,9 +774,9 @@ export default function AssistantPage() {
     void sendMessage(inputValue);
   }, [inputValue, sendMessage]);
 
-  // Append assistant reply (or error) when fetcher resolves
+  // Append assistant reply (or error) when fetcher resolves (normal flow — no navigation away)
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data) {
+    if (fetcher.state === "idle" && fetcher.data && historyReady) {
       const data = fetcher.data;
       if ("reply" in data) {
         setMessages((prev) => [
@@ -712,13 +794,18 @@ export default function AssistantPage() {
           { id: crypto.randomUUID(), role: "assistant", content: data.error, isError: true },
         ]);
       }
+      try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
     }
-  }, [fetcher.state, fetcher.data]);
+  }, [fetcher.state, fetcher.data, historyReady]);
 
   const handleClear = useCallback(async () => {
     if (!confirmClear) { setConfirmClear(true); return; }
     setConfirmClear(false);
     setMessages([]);
+    setIsRestoredThinking(false);
+    isRestoredThinkingRef.current = false;
+    pendingQuestionRef.current = null;
+    try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
     const sessionToken = await shopify.idToken();
     clearFetcher.submit(
       JSON.stringify({ intent: "clearHistory", sessionToken, shopId }),
