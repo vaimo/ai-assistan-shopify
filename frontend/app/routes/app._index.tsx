@@ -652,6 +652,7 @@ export default function AssistantPage() {
       role: m.role as "user" | "assistant",
       content: m.content,
       isError: m.isError,
+      documents: m.documents ?? [],
     }));
 
     if (!historyReady) {
@@ -696,6 +697,8 @@ export default function AssistantPage() {
         msgs[msgs.length - 1]?.role === "assistant";
 
       if (answerInHistory) {
+        // Replace the full messages array with authoritative DB history — this clears the
+        // temporary "pending-user" id placeholder and gives every message a real DB UUID.
         setMessages(msgs);
         isRestoredThinkingRef.current = false;
         setIsRestoredThinking(false);

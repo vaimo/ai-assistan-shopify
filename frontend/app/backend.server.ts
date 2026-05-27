@@ -91,6 +91,7 @@ export interface ChatMessageRecord {
   role: 'user' | 'assistant';
   content: string;
   isError: boolean;
+  documents: Array<{ title: string; link: string; source_type: string; blurb: string; updated_at: string | null }> | null;
   createdAt: string;
 }
 
