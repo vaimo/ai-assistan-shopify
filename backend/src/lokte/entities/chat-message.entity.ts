@@ -5,6 +5,7 @@ import {
   Index,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { SourceDocument } from '../lokte.service';
 
 @Entity('chat_messages')
 @Index(['shopId', 'userId', 'createdAt'])
@@ -26,6 +27,9 @@ export class ChatMessage {
 
   @Column({ default: false })
   isError!: boolean;
+
+  @Column('jsonb', { nullable: true, default: null })
+  documents!: SourceDocument[] | null;
 
   @CreateDateColumn()
   createdAt!: Date;

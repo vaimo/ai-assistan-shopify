@@ -54,7 +54,7 @@ export class LokteService {
     const result = await this.sendMessage(token, session.lokteSessionId, session.lastAssistantMsgId, question);
 
     await this.sessionRepo.update(session.id, { lastAssistantMsgId: result.reservedAssistantMsgId });
-    await this.persistMessages(shopId, userId, question, result.answer);
+    await this.persistMessages(shopId, userId, question, result.answer, result.documents);
 
     return { answer: result.answer, documents: result.documents };
   }
@@ -258,11 +258,12 @@ export class LokteService {
     userId: string,
     question: string,
     answer: string,
+    documents: SourceDocument[],
   ): Promise<void> {
     try {
       await this.messageRepo.save([
-        this.messageRepo.create({ shopId, userId, role: 'user', content: question }),
-        this.messageRepo.create({ shopId, userId, role: 'assistant', content: answer }),
+        this.messageRepo.create({ shopId, userId, role: 'user', content: question, documents: null }),
+        this.messageRepo.create({ shopId, userId, role: 'assistant', content: answer, documents }),
       ]);
 
       // Trim to HISTORY_LIMIT — delete oldest beyond cap
