@@ -377,6 +377,8 @@ function MarkdownLink({
                 color: rl.popupExcerptColor,
                 lineHeight: 1.45,
                 marginBottom: updatedDate ? "6px" : 0,
+                wordBreak: "break-word",
+                overflowWrap: "break-word",
               }}
             >
               {excerpt}
@@ -748,6 +750,14 @@ export default function AssistantPage() {
       const trimmed = text.trim();
       if (!trimmed || isLoading || !configured) return;
 
+      // If there was a stale "restored thinking" context from a prior navigation,
+      // supersede it — the new question is now the active one.
+      if (isRestoredThinkingRef.current) {
+        isRestoredThinkingRef.current = false;
+        setIsRestoredThinking(false);
+        pendingQuestionRef.current = null;
+      }
+
       setMessages((prev) => [
         ...prev,
         { id: crypto.randomUUID(), role: "user", content: trimmed },
@@ -777,9 +787,11 @@ export default function AssistantPage() {
     void sendMessage(inputValue);
   }, [inputValue, sendMessage]);
 
-  // Append assistant reply (or error) when fetcher resolves (normal flow — no navigation away)
+  // Append assistant reply (or error) when fetcher resolves (normal flow — no navigation away).
+  // Guard: skip when isRestoredThinking is active — in that flow the page was reloaded so the
+  // fetcher always starts fresh (data = undefined) and the polling path owns state cleanup.
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data && historyReady) {
+    if (fetcher.state === "idle" && fetcher.data && historyReady && !isRestoredThinkingRef.current) {
       const data = fetcher.data;
       if ("reply" in data) {
         setMessages((prev) => [
@@ -797,6 +809,11 @@ export default function AssistantPage() {
           { id: crypto.randomUUID(), role: "assistant", content: data.error, isError: true },
         ]);
       }
+      // Fetcher resolved means the request completed without navigation interruption —
+      // clear any stale restored-thinking state that may not have been polled away yet.
+      isRestoredThinkingRef.current = false;
+      setIsRestoredThinking(false);
+      pendingQuestionRef.current = null;
       try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
     }
   }, [fetcher.state, fetcher.data, historyReady]);
