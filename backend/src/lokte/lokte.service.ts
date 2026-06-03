@@ -12,7 +12,6 @@ import { ChatSession } from './entities/chat-session.entity';
 
 const LOKTE_BASE_URL = 'https://lokte.vaimo.network';
 const HISTORY_LIMIT = 100; // rows kept in DB per user
-const CONTEXT_LIMIT = 20;  // messages sent to Lokte per request
 
 interface CreateSessionResponse {
   id?: string;
@@ -261,10 +260,15 @@ export class LokteService {
     documents: SourceDocument[],
   ): Promise<void> {
     try {
-      await this.messageRepo.save([
+      // Save sequentially so the user message always gets a strictly earlier createdAt
+      // than the assistant message. A single batch save([user, assistant]) assigns both
+      // rows the same DB timestamp, causing non-deterministic ordering in production.
+      await this.messageRepo.save(
         this.messageRepo.create({ shopId, userId, role: 'user', content: question, documents: null }),
+      );
+      await this.messageRepo.save(
         this.messageRepo.create({ shopId, userId, role: 'assistant', content: answer, documents }),
-      ]);
+      );
 
       // Trim to HISTORY_LIMIT — delete oldest beyond cap
       const count = await this.messageRepo.count({ where: { shopId, userId } });

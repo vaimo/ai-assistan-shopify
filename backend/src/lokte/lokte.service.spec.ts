@@ -10,8 +10,36 @@ const mockConfigRegistry = {
   getDecrypted: mockConfigGetDecrypted,
 } as unknown as ConfigRegistryService;
 
+const mockMessageSave = jest.fn();
+const mockMessageCreate = jest.fn((data: object) => data);
+const mockMessageCount = jest.fn();
+const mockMessageFind = jest.fn();
+const mockMessageDelete = jest.fn();
+
+const mockMessageRepo = {
+  save: mockMessageSave,
+  create: mockMessageCreate,
+  count: mockMessageCount,
+  find: mockMessageFind,
+  delete: mockMessageDelete,
+} as unknown as import('typeorm').Repository<import('./entities/chat-message.entity').ChatMessage>;
+
+const mockSessionFindOne = jest.fn();
+const mockSessionSave = jest.fn();
+const mockSessionCreate = jest.fn((data: object) => data);
+const mockSessionUpdate = jest.fn();
+const mockSessionDelete = jest.fn();
+
+const mockSessionRepo = {
+  findOne: mockSessionFindOne,
+  save: mockSessionSave,
+  create: mockSessionCreate,
+  update: mockSessionUpdate,
+  delete: mockSessionDelete,
+} as unknown as import('typeorm').Repository<import('./entities/chat-session.entity').ChatSession>;
+
 function makeSut() {
-  return new LokteService(mockConfigRegistry);
+  return new LokteService(mockConfigRegistry, mockMessageRepo, mockSessionRepo);
 }
 
 function setupHappyConfig() {
@@ -23,6 +51,19 @@ function setupHappyConfig() {
   mockConfigGetDecrypted.mockResolvedValue('test-token');
 }
 
+function setupHappyRepos() {
+  // No pre-existing session → exercises createLokteSession (first fetch) + sendMessage (second fetch),
+  // which matches how all the existing test fetch mocks are structured (2 sequential mocks).
+  mockSessionFindOne.mockResolvedValue(null);
+  mockSessionCreate.mockImplementation((data: object) => data);
+  mockSessionSave.mockImplementation((entity: object) =>
+    Promise.resolve({ id: 'sess-db-1', lokteSessionId: 'lokte-sess-1', lastAssistantMsgId: null, ...entity }),
+  );
+  mockSessionUpdate.mockResolvedValue(undefined);
+  mockMessageSave.mockResolvedValue(undefined);
+  mockMessageCount.mockResolvedValue(1);
+}
+
 describe('LokteService', () => {
   beforeEach(() => jest.clearAllMocks());
 
@@ -32,7 +73,7 @@ describe('LokteService', () => {
       mockConfigGetDecrypted.mockResolvedValue('');
 
       const sut = makeSut();
-      await expect(sut.askQuestion('shop.myshopify.com', 'hello')).rejects.toThrow(
+      await expect(sut.askQuestion('shop.myshopify.com', 'user-id', 'hello')).rejects.toThrow(
         ServiceUnavailableException,
       );
     });
@@ -44,7 +85,7 @@ describe('LokteService', () => {
       mockConfigGetDecrypted.mockResolvedValue('');
 
       const sut = makeSut();
-      await expect(sut.askQuestion('shop.myshopify.com', 'hello')).rejects.toThrow(
+      await expect(sut.askQuestion('shop.myshopify.com', 'user-id', 'hello')).rejects.toThrow(
         ServiceUnavailableException,
       );
     });
@@ -57,14 +98,14 @@ describe('LokteService', () => {
       mockConfigGetDecrypted.mockResolvedValue('token');
 
       const sut = makeSut();
-      await expect(sut.askQuestion('shop.myshopify.com', 'hello')).rejects.toThrow(
+      await expect(sut.askQuestion('shop.myshopify.com', 'user-id', 'hello')).rejects.toThrow(
         ServiceUnavailableException,
       );
     });
   });
 
   describe('askQuestion — Lokte API calls', () => {
-    beforeEach(() => setupHappyConfig());
+    beforeEach(() => { setupHappyConfig(); setupHappyRepos(); });
 
     it('returns answer and empty documents on success', async () => {
       const ndjson = [
@@ -83,7 +124,7 @@ describe('LokteService', () => {
         } as unknown as Response);
 
       const sut = makeSut();
-      const result = await sut.askQuestion('shop.myshopify.com', 'What is the answer?');
+      const result = await sut.askQuestion('shop.myshopify.com', 'user-id', 'What is the answer?');
       expect(result.answer).toBe('The answer is 42');
       expect(result.documents).toEqual([]);
     });
@@ -106,7 +147,7 @@ describe('LokteService', () => {
         } as unknown as Response);
 
       const sut = makeSut();
-      const result = await sut.askQuestion('shop.myshopify.com', 'Hi?');
+      const result = await sut.askQuestion('shop.myshopify.com', 'user-id', 'Hi?');
       expect(result.answer).toBe('Hello world');
     });
 
@@ -141,7 +182,7 @@ describe('LokteService', () => {
         } as unknown as Response);
 
       const sut = makeSut();
-      const result = await sut.askQuestion('shop.myshopify.com', 'Find docs');
+      const result = await sut.askQuestion('shop.myshopify.com', 'user-id', 'Find docs');
       expect(result.answer).toBe('Answer with link.');
       expect(result.documents).toHaveLength(1);
       expect(result.documents[0]).toMatchObject({
@@ -180,7 +221,7 @@ describe('LokteService', () => {
         } as unknown as Response);
 
       const sut = makeSut();
-      const result = await sut.askQuestion('shop.myshopify.com', 'Slack question');
+      const result = await sut.askQuestion('shop.myshopify.com', 'user-id', 'Slack question');
       expect(result.answer).toBe('Flat answer.');
       expect(result.documents).toHaveLength(1);
       expect(result.documents[0]).toMatchObject({
@@ -197,7 +238,7 @@ describe('LokteService', () => {
       } as unknown as Response);
 
       const sut = makeSut();
-      await expect(sut.askQuestion('shop.myshopify.com', 'hello')).rejects.toThrow(
+      await expect(sut.askQuestion('shop.myshopify.com', 'user-id', 'hello')).rejects.toThrow(
         BadGatewayException,
       );
     });
@@ -215,7 +256,7 @@ describe('LokteService', () => {
         } as unknown as Response);
 
       const sut = makeSut();
-      await expect(sut.askQuestion('shop.myshopify.com', 'hello')).rejects.toThrow(
+      await expect(sut.askQuestion('shop.myshopify.com', 'user-id', 'hello')).rejects.toThrow(
         BadGatewayException,
       );
     });
@@ -224,7 +265,7 @@ describe('LokteService', () => {
       global.fetch = jest.fn().mockRejectedValueOnce(new Error('ECONNREFUSED'));
 
       const sut = makeSut();
-      await expect(sut.askQuestion('shop.myshopify.com', 'hello')).rejects.toThrow(
+      await expect(sut.askQuestion('shop.myshopify.com', 'user-id', 'hello')).rejects.toThrow(
         BadGatewayException,
       );
     });
@@ -236,9 +277,40 @@ describe('LokteService', () => {
       } as unknown as Response);
 
       const sut = makeSut();
-      await expect(sut.askQuestion('shop.myshopify.com', 'hello')).rejects.toThrow(
+      await expect(sut.askQuestion('shop.myshopify.com', 'user-id', 'hello')).rejects.toThrow(
         BadGatewayException,
       );
+    });
+  });
+
+  describe('persistMessages — message ordering', () => {
+    beforeEach(() => { setupHappyConfig(); setupHappyRepos(); });
+
+    it('saves user message strictly before assistant message (separate save calls)', async () => {
+      const ndjson = JSON.stringify({ obj: { type: 'message_delta', content: 'The answer' } });
+
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'lokte-sess-1' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(ndjson),
+        } as unknown as Response);
+
+      const saveOrder: string[] = [];
+      mockMessageSave.mockImplementation((entity: { role?: string }) => {
+        if (entity?.role) saveOrder.push(entity.role);
+        return Promise.resolve(entity);
+      });
+
+      const sut = makeSut();
+      await sut.askQuestion('shop.myshopify.com', 'user-id', 'What is the answer?');
+
+      expect(mockMessageSave).toHaveBeenCalledTimes(2);
+      expect(saveOrder).toEqual(['user', 'assistant']);
     });
   });
 });
