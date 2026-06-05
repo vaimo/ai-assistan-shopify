@@ -845,6 +845,7 @@ export default function Configuration() {
                         alignItems: "center",
                         gap: theme.spacing.xs,
                         transition: `opacity ${theme.transitions.fast}`,
+                        marginBottom: theme.spacing.xl,
                       }}
                     >
                       {isFaqRunning && <Spinner size="small" />}

@@ -1259,7 +1259,7 @@ export default function AssistantPage() {
                     style={{
                       textAlign: "left",
                       fontSize: theme.typography.body,
-                      margin: `0 ${theme.spacing.xxl}`,
+                      margin: `0 ${theme.spacing.lg}`,
                       padding: `10px ${theme.spacing.md}`,
                       borderRadius: theme.radius.button,
                       border: "none",
