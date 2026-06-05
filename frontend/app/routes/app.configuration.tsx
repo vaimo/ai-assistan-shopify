@@ -441,6 +441,7 @@ export default function Configuration() {
   const [localValues, setLocalValues] = useState<ConfigValues>({});
   const [savedBanner, setSavedBanner] = useState(false);
   const [faqStatus, setFaqStatus] = useState<{ lastGeneratedAt: string | null; questions: string[] | null }>({ lastGeneratedAt: null, questions: null });
+  const [faqRunError, setFaqRunError] = useState(false);
   const schema: Schema = loadFetcher.data?.schema ?? {};
 
   useEffect(() => {
@@ -464,10 +465,16 @@ export default function Configuration() {
     }
   }, [loadFetcher.data?.values]);
 
-  // Update FAQ status display from both load and force-run responses
+  // Update FAQ status display from both load and force-run responses.
+  // On force-run failure (forceRunOk === false) keep the existing displayed state — don't overwrite with nulls.
   useEffect(() => {
     const data = faqFetcher.data;
     if (!data) return;
+    if (data.forceRunOk === false) {
+      setFaqRunError(true);
+      return;
+    }
+    setFaqRunError(false);
     setFaqStatus({ lastGeneratedAt: data.lastGeneratedAt ?? null, questions: data.questions ?? null });
   }, [faqFetcher.data]);
 
@@ -734,7 +741,7 @@ export default function Configuration() {
                   <div>
                     <button
                       type="button"
-                      onClick={() => void handleForceRunFaq()}
+                      onClick={() => { setFaqRunError(false); void handleForceRunFaq(); }}
                       disabled={isFaqRunning}
                       style={{
                         background: isFaqRunning ? theme.colors.disabled : theme.colors.surface,
@@ -756,6 +763,20 @@ export default function Configuration() {
                       {isFaqRunning ? "Generating…" : "Force Regenerate FAQ Now"}
                     </button>
                   </div>
+                  {faqRunError && (
+                    <div
+                      style={{
+                        fontSize: theme.typography.small,
+                        color: theme.colors.errorText,
+                        padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
+                        background: theme.colors.errorBg,
+                        border: `1px solid ${theme.colors.errorBorder}`,
+                        borderRadius: theme.radius.button,
+                      }}
+                    >
+                      FAQ generation failed. Check that Lokte is configured and reachable.
+                    </div>
+                  )}
                 </div>
               </BlockStack>
             </Card>
