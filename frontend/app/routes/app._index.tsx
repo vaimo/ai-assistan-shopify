@@ -73,6 +73,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return json({ lokte, aiAssistantEnabled, devForceNotConfigured });
   }
 
+  if (intent === "loadFaq") {
+    const backendUrl = process.env.BACKEND_URL;
+    const res = await fetch(
+      `${backendUrl}/faq/${session.shop}`,
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
+    );
+    if (!res.ok) return json({ faqQuestions: null, faqLastGeneratedAt: null });
+    const data = await res.json() as { questions: string[] | null; lastGeneratedAt: string | null };
+    return json({ faqQuestions: data.questions, faqLastGeneratedAt: data.lastGeneratedAt });
+  }
+
   return json({});
 };
 
@@ -113,26 +124,13 @@ function isLokteConfigured(cfg: LokteConfig | null): boolean {
   return enabled && hasKey && hasUser;
 }
 
-interface SuggestedQuestion {
-  question: string;
-  label: string;
-}
-
-// Hardcoded for now — future: fetch from backend per shop
-const SUGGESTED_QUESTIONS: SuggestedQuestion[] = [
-  {
-    question: "What are my top-selling products this month?",
-    label: "Product insights",
-  },
-  {
-    question: "Show me recent orders that need attention.",
-    label: "Order management",
-  },
-  {
-    question: "How can I improve my store's conversion rate?",
-    label: "Store optimization",
-  },
+/** Absolute fallback questions — used when backend hasn't generated FAQs yet. */
+const DEFAULT_FAQ_QUESTIONS: string[] = [
+  "What are my top-selling products this month?",
+  "Show me recent orders that need attention.",
+  "How can I improve my store's conversion rate?",
 ];
+
 
 /** Animated "Thinking..." indicator — dots cycle 0→3 every 500ms. */
 function ThinkingDots() {
@@ -606,10 +604,12 @@ export default function AssistantPage() {
   const clearFetcher = useFetcher<{ cleared: boolean }>();
   const historyFetcher = useFetcher<{ messages: ChatMessageRecord[] }>();
   const configFetcher = useFetcher<{ lokte: LokteConfig; aiAssistantEnabled: boolean; devForceNotConfigured: boolean }>();
+  const faqFetcher = useFetcher<{ faqQuestions: string[] | null; faqLastGeneratedAt: string | null }>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>(DEFAULT_FAQ_QUESTIONS);
   // true when the user navigated away while the AI was processing and we're polling for the result
   const [isRestoredThinking, setIsRestoredThinking] = useState(false);
   // Ref mirror so effects can read the current value without re-running on every state change
@@ -626,7 +626,15 @@ export default function AssistantPage() {
   const isLoading = fetcher.state !== "idle" || isRestoredThinking;
   const hasMessages = messages.length > 0;
 
-  // Load Lokte config + chat history on mount
+  // Populate suggested questions from backend response (or keep defaults)
+  useEffect(() => {
+    const questions = faqFetcher.data?.faqQuestions;
+    if (Array.isArray(questions) && questions.length > 0) {
+      setSuggestedQuestions(questions);
+    }
+  }, [faqFetcher.data]);
+
+  // Load Lokte config + chat history + FAQ suggestions on mount
   useEffect(() => {
     (async () => {
       const sessionToken = await shopify.idToken();
@@ -636,6 +644,10 @@ export default function AssistantPage() {
       );
       historyFetcher.submit(
         { intent: "loadHistory", sessionToken, shopId },
+        { method: "POST", encType: "application/json" },
+      );
+      faqFetcher.submit(
+        { intent: "loadFaq", sessionToken, shopId },
         { method: "POST", encType: "application/json" },
       );
     })();
@@ -1238,16 +1250,16 @@ export default function AssistantPage() {
                   gap: theme.spacing.xxs,
                 }}
               >
-                {SUGGESTED_QUESTIONS.map((sq) => (
+                {suggestedQuestions.map((question) => (
                   <button
-                    key={sq.question}
+                    key={question}
                     type="button"
                     disabled={!configured}
-                    onClick={() => void sendMessage(sq.question)}
+                    onClick={() => void sendMessage(question)}
                     style={{
                       textAlign: "left",
                       fontSize: theme.typography.body,
-                      margin: `0 ${theme.spacing.xxl}`,
+                      margin: `0 ${theme.spacing.lg}`,
                       padding: `10px ${theme.spacing.md}`,
                       borderRadius: theme.radius.button,
                       border: "none",
@@ -1274,16 +1286,7 @@ export default function AssistantPage() {
                         lineHeight: 1.4,
                       }}
                     >
-                      {sq.question}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: theme.typography.small,
-                        color: theme.colors.textMuted,
-                        marginTop: theme.spacing.xxs,
-                      }}
-                    >
-                      →&nbsp;&nbsp;{sq.label}
+                      {question}
                     </div>
                   </button>
                 ))}

@@ -38,8 +38,16 @@ const mockSessionRepo = {
   delete: mockSessionDelete,
 } as unknown as import('typeorm').Repository<import('./entities/chat-session.entity').ChatSession>;
 
+const mockFaqPoolSave = jest.fn();
+const mockFaqPoolCreate = jest.fn((data: object) => data);
+
+const mockFaqPoolRepo = {
+  save: mockFaqPoolSave,
+  create: mockFaqPoolCreate,
+} as unknown as import('typeorm').Repository<import('../faq-suggestions/entities/faq-question-pool.entity').FaqQuestionPool>;
+
 function makeSut() {
-  return new LokteService(mockConfigRegistry, mockMessageRepo, mockSessionRepo);
+  return new LokteService(mockConfigRegistry, mockMessageRepo, mockSessionRepo, mockFaqPoolRepo);
 }
 
 function setupHappyConfig() {
@@ -62,6 +70,9 @@ function setupHappyRepos() {
   mockSessionUpdate.mockResolvedValue(undefined);
   mockMessageSave.mockResolvedValue(undefined);
   mockMessageCount.mockResolvedValue(1);
+  // FAQ pool logging is non-fatal; resolve by default
+  mockFaqPoolSave.mockResolvedValue(undefined);
+  mockFaqPoolCreate.mockImplementation((data: object) => data);
 }
 
 describe('LokteService', () => {

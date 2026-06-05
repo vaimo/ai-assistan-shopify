@@ -5,6 +5,7 @@ import { LokteService } from './lokte.service';
 import { LokteController } from './lokte.controller';
 import { ChatMessage } from './entities/chat-message.entity';
 import { ChatSession } from './entities/chat-session.entity';
+import { FaqQuestionPool } from '../faq-suggestions/entities/faq-question-pool.entity';
 
 /**
  * Lokte feature module.
@@ -18,7 +19,7 @@ import { ChatSession } from './entities/chat-session.entity';
  *   - general.user_id — text    (used as persona_id in Lokte API calls)
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([ChatMessage, ChatSession])],
+  imports: [TypeOrmModule.forFeature([ChatMessage, ChatSession, FaqQuestionPool])],
   providers: [LokteService],
   controllers: [LokteController],
 })
