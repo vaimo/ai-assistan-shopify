@@ -68,5 +68,6 @@ Technical reference for developers and DevOps.
 - [Local Development Setup](../LOCAL_DEVELOPMENT.md)
 - [Production Deployment Guide](../PROD_DEPLOY.md)
 - [Chat History Feature — Architecture](../Features/chat_history.md)
+- [FAQ Suggestions Feature — Architecture](../Features/faq-suggestions.md)
 - [ConfigRegistry Module Reference](../../backend/src/config-registry/README.md)
 - [Lokte Module Reference](../../backend/src/lokte/README.md)

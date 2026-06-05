@@ -9,6 +9,7 @@ import { Repository } from 'typeorm';
 import { ConfigRegistryService } from '../config-registry/config-registry.service';
 import { ChatMessage } from './entities/chat-message.entity';
 import { ChatSession } from './entities/chat-session.entity';
+import { FaqQuestionPool } from '../faq-suggestions/entities/faq-question-pool.entity';
 
 const LOKTE_BASE_URL = 'https://lokte.vaimo.network';
 const HISTORY_LIMIT = 100; // rows kept in DB per user
@@ -41,6 +42,8 @@ export class LokteService {
     private readonly messageRepo: Repository<ChatMessage>,
     @InjectRepository(ChatSession)
     private readonly sessionRepo: Repository<ChatSession>,
+    @InjectRepository(FaqQuestionPool)
+    private readonly faqPoolRepo: Repository<FaqQuestionPool>,
   ) {}
 
   async askQuestion(shopId: string, userId: string, question: string): Promise<AskQuestionResult> {
@@ -268,6 +271,12 @@ export class LokteService {
       );
       await this.messageRepo.save(
         this.messageRepo.create({ shopId, userId, role: 'assistant', content: answer, documents }),
+      );
+
+      // Log the user question to the FAQ pool — persists across chat history clears,
+      // consumed by the FAQ generation cron and cleared after each successful run.
+      await this.faqPoolRepo.save(this.faqPoolRepo.create({ shopId, question })).catch((e) =>
+        this.logger.warn('Failed to append question to faq_question_pool', e),
       );
 
       // Trim to HISTORY_LIMIT — delete oldest beyond cap

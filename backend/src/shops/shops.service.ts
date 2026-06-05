@@ -24,6 +24,10 @@ export class ShopsService {
     return this.shopRepository.findOneOrFail({ where: { shopDomain } });
   }
 
+  async findAllActive(): Promise<Shop[]> {
+    return this.shopRepository.find({ where: { isActive: true } });
+  }
+
   async deactivate(shopDomain: string): Promise<void> {
     const shop = await this.shopRepository.findOne({ where: { shopDomain } });
     if (!shop) {

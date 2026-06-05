@@ -70,6 +70,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
+  if (intent === "loadFaqStatus") {
+    const res = await fetch(
+      `${process.env.BACKEND_URL}/faq/${shopId}`,
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
+    );
+    const data = res.ok
+      ? (await res.json() as { questions: string[] | null; lastGeneratedAt: string | null })
+      : { questions: null, lastGeneratedAt: null };
+    return json(data);
+  }
+
+  if (intent === "forceRunFaq") {
+    const res = await fetch(
+      `${process.env.BACKEND_URL}/faq/${shopId}/generate`,
+      { method: "POST", headers: authHeaders },
+    );
+    const data = res.ok
+      ? (await res.json() as { questions: string[] | null; lastGeneratedAt: string | null })
+      : { questions: null, lastGeneratedAt: null };
+    return json({ ...data, forceRunOk: res.ok });
+  }
+
   // Bulk save: one backend call per changed field, run in parallel
   const results = await Promise.all(
     (changes as Array<{ path: string; value: unknown }>).map((change) =>
@@ -414,9 +436,11 @@ export default function Configuration() {
 
   const loadFetcher = useFetcher<{ schema: Schema; values: ConfigValues }>();
   const saveFetcher = useFetcher<{ saved: boolean }>();
+  const faqFetcher = useFetcher<{ questions: string[] | null; lastGeneratedAt: string | null; forceRunOk?: boolean }>();
 
   const [localValues, setLocalValues] = useState<ConfigValues>({});
   const [savedBanner, setSavedBanner] = useState(false);
+  const [faqStatus, setFaqStatus] = useState<{ lastGeneratedAt: string | null; questions: string[] | null }>({ lastGeneratedAt: null, questions: null });
   const schema: Schema = loadFetcher.data?.schema ?? {};
 
   useEffect(() => {
@@ -424,6 +448,10 @@ export default function Configuration() {
       const sessionToken = await shopify.idToken();
       loadFetcher.submit(
         JSON.stringify({ intent: "load", sessionToken, shopId }),
+        { method: "POST", encType: "application/json" }
+      );
+      faqFetcher.submit(
+        JSON.stringify({ intent: "loadFaqStatus", sessionToken, shopId }),
         { method: "POST", encType: "application/json" }
       );
     })();
@@ -435,6 +463,13 @@ export default function Configuration() {
       setLocalValues(loadFetcher.data.values);
     }
   }, [loadFetcher.data?.values]);
+
+  // Update FAQ status display from both load and force-run responses
+  useEffect(() => {
+    const data = faqFetcher.data;
+    if (!data) return;
+    setFaqStatus({ lastGeneratedAt: data.lastGeneratedAt ?? null, questions: data.questions ?? null });
+  }, [faqFetcher.data]);
 
   useEffect(() => {
     if (saveFetcher.data?.saved) {
@@ -453,6 +488,14 @@ export default function Configuration() {
         value
       ),
     }));
+  };
+
+  const handleForceRunFaq = async () => {
+    const sessionToken = await shopify.idToken();
+    faqFetcher.submit(
+      JSON.stringify({ intent: "forceRunFaq", sessionToken, shopId }),
+      { method: "POST", encType: "application/json" }
+    );
   };
 
   const handleSave = async () => {
@@ -479,6 +522,7 @@ export default function Configuration() {
 
   const isLoading = loadFetcher.state !== "idle";
   const isSaving = saveFetcher.state !== "idle";
+  const isFaqRunning = faqFetcher.state !== "idle";
 
   return (
     <div style={{ fontFamily: theme.typography.fontFamily, margin: `0 ${theme.spacing.lg}` }}>
@@ -645,6 +689,78 @@ export default function Configuration() {
               </Layout.Section>
             );
           })}
+
+        {/* ── FAQ Management card ── */}
+        {!isLoading && (
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400">
+                <Text variant="headingMd" as="h3">
+                  FAQ Suggestions — Management
+                </Text>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: theme.spacing.sm,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: theme.typography.body,
+                      color: theme.colors.textSecondary,
+                    }}
+                  >
+                    {faqStatus.lastGeneratedAt
+                      ? `Last generated: ${new Date(faqStatus.lastGeneratedAt).toLocaleString()}`
+                      : "No FAQ suggestions have been generated yet."}
+                  </div>
+                  {faqStatus.questions && faqStatus.questions.length > 0 && (
+                    <div
+                      style={{
+                        fontSize: theme.typography.small,
+                        color: theme.colors.textMuted,
+                        paddingLeft: theme.spacing.md,
+                        borderLeft: `3px solid ${theme.colors.borderSubtle}`,
+                      }}
+                    >
+                      {faqStatus.questions.map((q, i) => (
+                        <div key={i} style={{ marginBottom: theme.spacing.xxs }}>
+                          {i + 1}. {q}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => void handleForceRunFaq()}
+                      disabled={isFaqRunning}
+                      style={{
+                        background: isFaqRunning ? theme.colors.disabled : theme.colors.surface,
+                        color: isFaqRunning ? theme.colors.textMuted : theme.colors.brand,
+                        border: `1px solid ${isFaqRunning ? theme.colors.borderSubtle : theme.colors.brand}`,
+                        borderRadius: theme.radius.button,
+                        padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
+                        fontFamily: "inherit",
+                        fontSize: theme.typography.body,
+                        fontWeight: 600,
+                        cursor: isFaqRunning ? "not-allowed" : "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: theme.spacing.xs,
+                        transition: `opacity ${theme.transitions.fast}`,
+                      }}
+                    >
+                      {isFaqRunning && <Spinner size="small" />}
+                      {isFaqRunning ? "Generating…" : "Force Regenerate FAQ Now"}
+                    </button>
+                  </div>
+                </div>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        )}
         </Layout>
       </Page>
     </div>

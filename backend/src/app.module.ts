@@ -7,10 +7,12 @@ import { AuthModule } from './auth/auth.module';
 import { ShopsModule } from './shops/shops.module';
 import { ConfigRegistryModule } from './config-registry/config-registry.module';
 import { LokteModule } from './lokte/lokte.module';
+import { FaqSuggestionsModule } from './faq-suggestions/faq-suggestions.module';
 import { DevToolsModule } from './dev-tools/dev-tools.module';
 import { InitialSchema1714284000000 } from './database/migrations/1714284000000-InitialSchema';
 import { AddCoreConfig1745798400000 } from './database/migrations/1745798400000-AddCoreConfig';
 import { AddChatTables1747650000000 } from './database/migrations/1747650000000-AddChatTables';
+import { AddFaqTables1748700000000 } from './database/migrations/1748700000000-AddFaqTables';
 
 const devOnlyModules = process.env.NODE_ENV !== 'production' ? [DevToolsModule] : [];
 
@@ -32,7 +34,7 @@ const devOnlyModules = process.env.NODE_ENV !== 'production' ? [DevToolsModule] 
         database: config.getOrThrow<string>('DB_NAME'),
         synchronize: false,
         autoLoadEntities: true,
-        migrations: [InitialSchema1714284000000, AddCoreConfig1745798400000, AddChatTables1747650000000],
+        migrations: [InitialSchema1714284000000, AddCoreConfig1745798400000, AddChatTables1747650000000, AddFaqTables1748700000000],
         migrationsRun: true,
       }),
     }),
@@ -44,6 +46,7 @@ const devOnlyModules = process.env.NODE_ENV !== 'production' ? [DevToolsModule] 
     ShopsModule,
     ConfigRegistryModule,
     LokteModule,
+    FaqSuggestionsModule,
     ...devOnlyModules,
   ],
 })
