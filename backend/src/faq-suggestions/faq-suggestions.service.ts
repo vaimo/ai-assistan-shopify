@@ -25,17 +25,22 @@ const MAX_QUESTION_LENGTH = 200;
 /**
  * System prompt sent to Lokte for FAQ generation.
  * Lokte is an internal AI/RAG platform that answers from the company knowledge base.
+ * The prompt is intentionally strict to prevent off-topic questions from surfacing.
  */
 const FAQ_GENERATION_PROMPT = (questions: string[]) =>
-  `You are a FAQ curator for a merchant assistant powered by Lokte — an internal AI/RAG platform that connects to company knowledge bases and data sources.
+  `You are a strict FAQ curator for a business assistant powered by Lokte — an internal AI/RAG platform that answers questions about a company's own knowledge base, internal processes, products, orders, and operational data.
 
-Analyze the following list of questions asked by merchants and return exactly 3 of the most useful, commonly-asked questions. Rules:
-- Rewrite them clearly and concisely (max ~12 words each)
-- Filter out: test/nonsensical messages, very specific one-off requests, incomplete sentences, profanity
-- Return ONLY a valid JSON array of exactly 3 strings, nothing else — no explanation, no markdown
-- If fewer than 3 good questions exist, fill the remaining slots with plausible Lokte-related questions (e.g. about products, orders, inventory, or company procedures)
+Your task: from the list of questions below, select and rewrite exactly 3 questions that employees or merchants would realistically ask about their OWN company's operations, products, data, or internal knowledge base.
 
-Example output: ["How do I process a refund?","What are the top products this month?","How do I update inventory levels?"]
+Rules — you MUST follow all of them:
+1. STRICT TOPIC FILTER: Keep ONLY questions about business operations, products, orders, inventory, company procedures, internal tools, or data that Lokte would be expected to answer. DISCARD anything unrelated to work — cooking, personal topics, general trivia, entertainment, external news, or any topic that has no connection to company/business operations.
+2. REWRITE each kept question to be clear and concise (max 12 words). Use professional business language.
+3. Return ONLY a valid JSON array of exactly 3 strings. No explanation, no markdown, no extra text.
+4. If fewer than 3 on-topic questions remain after filtering, fill missing slots ONLY with plausible questions a business user would ask about their company's products, orders, or internal processes (e.g. inventory levels, sales performance, order status, company policies).
+5. NEVER invent off-topic questions to fill slots.
+
+Example valid output: ["What are our top-selling products this month?","Which orders need urgent attention?","How do I update product inventory levels?"]
+Example invalid output (contains off-topic): ["How do I bake sourdough bread?","What movies are trending?","Top products this month?"]
 
 Questions to analyze:
 ${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`;
@@ -81,9 +86,11 @@ export class FaqSuggestionsService {
     const enabled = await this.configRegistry.get(shopId, 'faq_suggestions.general.enable');
     if (!Number(enabled)) return;
 
-    const intervalHours = Number(
+    const rawInterval = Number(
       (await this.configRegistry.get(shopId, 'faq_suggestions.general.cron_interval_hours')) ?? 24,
     );
+    // Clamp to valid range: minimum 1 hour, maximum 168 hours (1 week)
+    const intervalHours = Math.min(168, Math.max(1, isNaN(rawInterval) ? 24 : rawInterval));
     const lastGeneratedAt = await this.getLastGeneratedAt(shopId);
     const elapsedMs = lastGeneratedAt ? Date.now() - lastGeneratedAt.getTime() : Infinity;
     const intervalMs = intervalHours * 60 * 60 * 1000;

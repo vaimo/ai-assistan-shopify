@@ -10,9 +10,6 @@ import {
   BlockStack,
   Text,
   Select as PolarisSelect,
-  TextField,
-  Collapsible,
-  Divider,
   Spinner,
   SkeletonBodyText,
 } from "@shopify/polaris";
@@ -195,6 +192,77 @@ function ToggleSwitch({
   );
 }
 
+// ── Shared plain input style (matches Polaris aesthetics without Polaris overhead) ─
+function plainInputStyle(isInvalid = false): React.CSSProperties {
+  return {
+    display: "block",
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "6px 12px",
+    border: `1px solid ${isInvalid ? "#d82c0d" : "#8c9196"}`,
+    borderRadius: "6px",
+    fontSize: "14px",
+    lineHeight: "20px",
+    color: "#202223",
+    background: "#fff",
+    outline: "none",
+    fontFamily: "inherit",
+  };
+}
+
+function PlainInput({
+  id,
+  type = "text",
+  inputMode,
+  value,
+  autoComplete,
+  isInvalid,
+  onChange,
+}: {
+  id: string;
+  type?: "text" | "password";
+  inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
+  value: string;
+  autoComplete?: string;
+  isInvalid?: boolean;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <input
+      id={id}
+      type={type}
+      inputMode={inputMode}
+      value={value}
+      autoComplete={autoComplete ?? "off"}
+      onChange={(e) => onChange(e.target.value)}
+      style={plainInputStyle(isInvalid)}
+      onFocus={(e) => {
+        e.currentTarget.style.borderColor = isInvalid ? "#d82c0d" : "#005bd3";
+        e.currentTarget.style.boxShadow = "0 0 0 2px rgba(0,91,211,0.2)";
+      }}
+      onBlur={(e) => {
+        e.currentTarget.style.borderColor = isInvalid ? "#d82c0d" : "#8c9196";
+        e.currentTarget.style.boxShadow = "none";
+      }}
+    />
+  );
+}
+
+// ── Accordion body — overflow:visible when open so error messages are never clipped ─
+function AccordionBody({ open, children }: { open: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        maxHeight: open ? "2000px" : "0",
+        overflow: open ? "visible" : "hidden",
+        transition: open ? "max-height 0.25s ease" : "max-height 0.15s ease",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 // ── Field renderer ────────────────────────────────────────────────────────────
 function ConfigField({
   namespace,
@@ -210,6 +278,14 @@ function ConfigField({
   onChange: (value: unknown) => void;
 }) {
   const id = `field-${namespace}-${fieldPath.replace(/\./g, "-")}`;
+
+  // Number validation (computed here so error can occupy its own grid row)
+  const numVal = fieldMeta.fieldType === "number" ? String(value ?? "") : "";
+  const numParsed = Number(numVal);
+  const numError =
+    fieldMeta.fieldType === "number" && numVal !== "" && (isNaN(numParsed) || numParsed < 1 || numParsed > 168)
+      ? "Must be between 1 and 168 hours (1 week)"
+      : null;
 
   const renderControl = () => {
     switch (fieldMeta.fieldType) {
@@ -237,23 +313,12 @@ function ConfigField({
           ? (isOn ? fieldMeta.toggleOptions[0].label : fieldMeta.toggleOptions[1].label)
           : (isOn ? "On" : "Off");
         return (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: theme.spacing.md,
-            }}
-          >
+          <div style={{ display: "flex", alignItems: "center", gap: theme.spacing.md }}>
             <ToggleSwitch
               checked={isOn}
               onChange={(newChecked) => {
                 if (fieldMeta.toggleOptions) {
-                  // Use the typed option values (e.g. 1/0) rather than plain boolean
-                  onChange(
-                    newChecked
-                      ? fieldMeta.toggleOptions[0].value
-                      : fieldMeta.toggleOptions[1].value
-                  );
+                  onChange(newChecked ? fieldMeta.toggleOptions[0].value : fieldMeta.toggleOptions[1].value);
                 } else {
                   onChange(newChecked);
                 }
@@ -278,61 +343,74 @@ function ConfigField({
 
       case "number":
         return (
-          <TextField
-            label=""
-            labelHidden
+          <PlainInput
             id={id}
-            type="number"
-            value={String(value ?? "")}
-            onChange={(v) => onChange(v === "" ? "" : Number(v))}
-            autoComplete="off"
+            inputMode="numeric"
+            value={numVal}
+            isInvalid={!!numError}
+            onChange={(v) => {
+              const stripped = v.replace(/[^\d]/g, "");
+              onChange(stripped === "" ? "" : Number(stripped));
+            }}
           />
         );
 
       case "secret":
         return (
-          <TextField
-            label=""
-            labelHidden
+          <PlainInput
             id={id}
             type="password"
             value={String(value ?? "")}
-            onChange={(v) => onChange(v)}
             autoComplete="new-password"
+            onChange={(v) => onChange(v)}
           />
         );
 
       default: // "text"
         return (
-          <TextField
-            label=""
-            labelHidden
+          <PlainInput
             id={id}
-            type="text"
             value={String(value ?? "")}
             onChange={(v) => onChange(v)}
-            autoComplete="off"
           />
         );
     }
   };
 
+  // 2-row CSS grid: row 1 = [label | control], row 2 = [empty | error]
+  // label uses align-self:center so it centers against row-1 height (the input) only.
   return (
     <div
       style={{
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
-        gap: `${theme.spacing.sm} ${theme.spacing.lg}`,
-        alignItems: "center",
+        columnGap: theme.spacing.lg,
         padding: `${theme.spacing.md} 0`,
       }}
     >
-      <label htmlFor={id}>
+      <label
+        htmlFor={id}
+        style={{ gridColumn: 1, gridRow: 1, alignSelf: "center", paddingRight: theme.spacing.sm }}
+      >
         <Text variant="bodyMd" as="span" fontWeight="medium">
           {fieldMeta.keyLabel}
         </Text>
       </label>
-      <div>{renderControl()}</div>
+      <div style={{ gridColumn: 2, gridRow: 1 }}>{renderControl()}</div>
+      {numError && (
+        <p
+          style={{
+            gridColumn: 2,
+            gridRow: 2,
+            margin: "4px 0 0",
+            fontSize: "12px",
+            color: "#d82c0d",
+            lineHeight: "16px",
+          }}
+        >
+          {numError}
+        </p>
+      )}
     </div>
   );
 }
@@ -395,7 +473,7 @@ function ConfigGroup({
       </button>
 
       {/* Collapsible body */}
-      <Collapsible open={open} id={id}>
+      <AccordionBody open={open}>
         <div
           style={{
             border: `1px solid ${theme.colors.borderSubtle}`,
@@ -424,7 +502,7 @@ function ConfigGroup({
             </div>
           ))}
         </div>
-      </Collapsible>
+      </AccordionBody>
     </div>
   );
 }
@@ -531,6 +609,17 @@ export default function Configuration() {
   const isSaving = saveFetcher.state !== "idle";
   const isFaqRunning = faqFetcher.state !== "idle";
 
+  // Block Save if any number field has an out-of-range value
+  const hasValidationErrors = Object.entries(schema).some(([namespace, nsMeta]) =>
+    Object.entries(nsMeta.fields).some(([fieldPath, fieldMeta]) => {
+      if (fieldMeta.fieldType !== "number") return false;
+      const raw = String(getNestedValue((localValues[namespace] as Record<string, unknown>) ?? {}, fieldPath) ?? "");
+      if (raw === "") return false;
+      const n = Number(raw);
+      return isNaN(n) || n < 1 || n > 168;
+    })
+  );
+
   return (
     <div style={{ fontFamily: theme.typography.fontFamily, margin: `0 ${theme.spacing.lg}` }}>
       <Page>
@@ -576,20 +665,19 @@ export default function Configuration() {
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={isSaving || isLoading}
+                disabled={isSaving || isLoading || hasValidationErrors}
                 style={{
-                  background: theme.colors.brand,
-                  color: theme.colors.white,
-                  border: `1px solid ${theme.colors.brand}`,
+                  background: isSaving || isLoading || hasValidationErrors ? theme.colors.disabled : theme.colors.brand,
+                  color: isSaving || isLoading || hasValidationErrors ? theme.colors.textSecondary : theme.colors.white,
+                  border: `1px solid ${isSaving || isLoading || hasValidationErrors ? theme.colors.border : theme.colors.brand}`,
                   borderRadius: theme.radius.button,
                   padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
                   fontFamily: "inherit",
                   fontSize: theme.typography.body,
                   fontWeight: 700,
-                  cursor: isSaving || isLoading ? "not-allowed" : "pointer",
-                  opacity: isSaving || isLoading ? 0.7 : 1,
-                  boxShadow: isSaving ? "none" : theme.shadows.bubble,
-                  transition: `opacity ${theme.transitions.fast}`,
+                  cursor: isSaving || isLoading || hasValidationErrors ? "not-allowed" : "pointer",
+                  boxShadow: isSaving || isLoading || hasValidationErrors ? "none" : theme.shadows.bubble,
+                  transition: `background ${theme.transitions.fast}, color ${theme.transitions.fast}, border-color ${theme.transitions.fast}`,
                 }}
               >
                 {isSaving ? "Saving..." : "Save"}
@@ -677,7 +765,7 @@ export default function Configuration() {
                     <Text variant="headingMd" as="h3">
                       {nsMeta.moduleLabel}
                     </Text>
-                    <BlockStack gap="200">
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                       {groups.map(({ groupLabel, entries }) => (
                         <ConfigGroup
                           key={groupLabel}
@@ -690,7 +778,7 @@ export default function Configuration() {
                           }
                         />
                       ))}
-                    </BlockStack>
+                    </div>
                   </BlockStack>
                 </Card>
               </Layout.Section>
