@@ -1,0 +1,11 @@
+{
+  "hooks": [
+    {
+      "name": "shopify-security-gate",
+      "event": "PreToolUse",
+      "tools": ["write_file", "create_file"],
+      "script": "hooks/scripts/security-gate.sh",
+      "description": "Blocks writes containing dangerous Shopify/Liquid patterns"
+    }
+  ]
+}
