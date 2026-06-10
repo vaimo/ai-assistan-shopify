@@ -3,6 +3,7 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
@@ -25,6 +26,7 @@ export class ChatMessage {
   chatSessionId!: string;
 
   @ManyToOne(() => ChatSession, (session) => session.messages, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'chatSessionId' })
   session!: ChatSession;
 
   @Column()

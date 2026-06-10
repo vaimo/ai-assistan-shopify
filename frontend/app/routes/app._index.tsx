@@ -638,6 +638,9 @@ export default function AssistantPage() {
   // Ref mirror so effects can read the current value without re-running on every state change
   const isRestoredThinkingRef = useRef(false);
   const pendingQuestionRef = useRef<string | null>(null);
+  // Track the last fetcher.data we already processed so the resolve effect doesn't re-fire
+  // when historyReady transitions false→true (chat switch) with stale data from a previous chat.
+  const lastProcessedFetcherData = useRef<unknown>(null);
 
   // ── Multi-chat state ────────────────────────────────────────────────────────
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -647,6 +650,8 @@ export default function AssistantPage() {
   // Guard: chatsFetcher effect must only auto-activate + load history on the initial mount load.
   // Subsequent refreshes (e.g. after a new chat is created) should only update the sidebar list.
   const initialChatLoadDone = useRef(false);
+  // Detect real fetch completions: only process history when fetcher transitions non-idle → idle.
+  const prevHistoryFetcherState = useRef<string>("idle");
   useEffect(() => { activeChatIdRef.current = activeChatId; }, [activeChatId]);
 
   const lokteConfig: LokteConfig | null = (configFetcher.data?.lokte as LokteConfig) ?? null;
@@ -735,8 +740,14 @@ export default function AssistantPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatsFetcher.data]);
 
-  // Hydrate messages from history. Runs on first load and on every poll while waiting for AI.
+  // Hydrate messages from history. Only fires when historyFetcher transitions non-idle → idle,
+  // i.e. a real fetch just completed. This avoids processing stale cached data when deps change
+  // for unrelated reasons (e.g. historyReady flip during a chat switch).
   useEffect(() => {
+    // Track state transitions; only process on non-idle → idle (a fetch just completed)
+    const wasLoading = prevHistoryFetcherState.current !== "idle";
+    prevHistoryFetcherState.current = historyFetcher.state;
+    if (!wasLoading || historyFetcher.state !== "idle") return;
     if (historyFetcher.data?.messages === undefined) return;
 
     const msgs: ChatMessage[] = historyFetcher.data.messages.map((m) => ({
@@ -748,7 +759,7 @@ export default function AssistantPage() {
     }));
 
     if (!historyReady) {
-      // ── First load after mount ─────────────────────────────────────────────
+      // ── First load after mount OR after a chat switch ─────────────────────
       let pendingMsg: ChatMessage | null = null;
       try {
         const raw = sessionStorage.getItem("ai-chat-pending");
@@ -794,11 +805,11 @@ export default function AssistantPage() {
         try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
       }
     } else {
-      // ── Chat switch: historyReady is already true, just swap messages ─────
+      // historyReady already true (e.g. polling refresh with no pending message)
       setMessages(msgs);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyFetcher.data]);
+  }, [historyFetcher.state, historyFetcher.data]);
 
   // Poll history while waiting for a restored-thinking answer
   useEffect(() => {
@@ -881,8 +892,17 @@ export default function AssistantPage() {
   // Append assistant reply (or error) when fetcher resolves (normal flow — no navigation away).
   // Guard: skip when isRestoredThinking is active — in that flow the page was reloaded so the
   // fetcher always starts fresh (data = undefined) and the polling path owns state cleanup.
+  // Guard: skip if we already processed this exact fetcher.data object — prevents re-firing
+  // when historyReady transitions false→true after a chat switch (stale data from previous chat).
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data && historyReady && !isRestoredThinkingRef.current) {
+    if (
+      fetcher.state === "idle" &&
+      fetcher.data &&
+      historyReady &&
+      !isRestoredThinkingRef.current &&
+      fetcher.data !== lastProcessedFetcherData.current
+    ) {
+      lastProcessedFetcherData.current = fetcher.data;
       const data = fetcher.data;
       if ("reply" in data) {
         // If the backend created a new chat session, update our chat list + activeChatId
@@ -935,6 +955,7 @@ export default function AssistantPage() {
         const next = remaining[0] ?? null;
         setActiveChatId(next?.id ?? null);
         activeChatIdRef.current = next?.id ?? null;
+        setHistoryReady(false);
         if (next) {
           (async () => {
             const sessionToken = await shopify.idToken();
@@ -991,6 +1012,7 @@ export default function AssistantPage() {
     setIsRestoredThinking(false);
     isRestoredThinkingRef.current = false;
     pendingQuestionRef.current = null;
+    lastProcessedFetcherData.current = null;
     try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
     setHistoryReady(true);
   }, []);
@@ -1006,12 +1028,14 @@ export default function AssistantPage() {
     setIsRestoredThinking(false);
     isRestoredThinkingRef.current = false;
     pendingQuestionRef.current = null;
+    // Mark current fetcher data as processed so the resolve effect skips it on historyReady flip
+    lastProcessedFetcherData.current = fetcher.data ?? null;
     const sessionToken = await shopify.idToken();
     historyFetcher.submit(
       { intent: "loadHistory", sessionToken, shopId, chatId },
       { method: "POST", encType: "application/json" },
     );
-  }, [shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shopify, shopId, fetcher.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
