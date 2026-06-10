@@ -3,12 +3,14 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { SourceDocument } from '../lokte.service';
+import { ChatSession } from './chat-session.entity';
 
 @Entity('chat_messages')
-@Index(['shopId', 'userId', 'createdAt'])
+@Index(['chatSessionId'])
 export class ChatMessage {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -18,6 +20,12 @@ export class ChatMessage {
 
   @Column()
   userId!: string;
+
+  @Column()
+  chatSessionId!: string;
+
+  @ManyToOne(() => ChatSession, (session) => session.messages, { onDelete: 'CASCADE' })
+  session!: ChatSession;
 
   @Column()
   role!: 'user' | 'assistant';

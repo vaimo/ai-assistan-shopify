@@ -15,7 +15,7 @@ import { assistantTheme as theme } from "~/styles/assistant-theme";
 // (backend DevToolsModule, non-production only). No hardcoded constants here.
 // ────────────────────────────────────────────────────────────────────────────
 
-import { clearChatHistory, type ChatMessageRecord } from "~/backend.server";
+import { clearAllChatHistory, type ChatMessageRecord, type ChatSummary } from "~/backend.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -24,10 +24,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  const { intent, sessionToken, shopId } = await request.json() as {
+  const { intent, sessionToken, shopId, chatId } = await request.json() as {
     intent: string;
     sessionToken: string;
     shopId: string;
+    chatId?: string;
   };
 
   // Prevent a tampered request body from targeting a different shop
@@ -35,19 +36,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (intent === "clearHistory") {
-    await clearChatHistory(session.shop, sessionToken);
-    return json({ cleared: true });
+  if (intent === "loadChats") {
+    const backendUrl = process.env.BACKEND_URL;
+    const res = await fetch(
+      `${backendUrl}/lokte/${session.shop}/chats`,
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
+    );
+    const chats = res.ok ? await res.json() : [];
+    return json({ chats });
   }
 
   if (intent === "loadHistory") {
+    if (!chatId) return json({ messages: [] });
     const backendUrl = process.env.BACKEND_URL;
     const res = await fetch(
-      `${backendUrl}/lokte/${session.shop}/history`,
+      `${backendUrl}/lokte/${session.shop}/chats/${chatId}/history`,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
     const messages = res.ok ? await res.json() : [];
     return json({ messages });
+  }
+
+  if (intent === "clearHistory") {
+    if (!chatId) return json({ deleted: false });
+    const backendUrl = process.env.BACKEND_URL;
+    const res = await fetch(
+      `${backendUrl}/lokte/${session.shop}/chats/${chatId}`,
+      { method: "DELETE", headers: { Authorization: `Bearer ${sessionToken}` } },
+    );
+    return json({ deleted: res.ok });
+  }
+
+  if (intent === "clearAllHistory") {
+    await clearAllChatHistory(session.shop, sessionToken);
+    return json({ cleared: true });
   }
 
   if (intent === "loadLokte") {
@@ -103,7 +125,7 @@ interface SourceDocument {
   updated_at: string | null;
 }
 
-type ChatApiResponse = { reply: string; documents: SourceDocument[] } | { error: string };
+type ChatApiResponse = { reply: string; documents: SourceDocument[]; chatId: string | null } | { error: string };
 
 interface LokteConfig {
   general?: {
@@ -601,20 +623,31 @@ export default function AssistantPage() {
   const [historyReady, setHistoryReady] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const fetcher = useFetcher<ChatApiResponse>();
-  const clearFetcher = useFetcher<{ cleared: boolean }>();
+  const clearFetcher = useFetcher<{ deleted?: boolean; cleared?: boolean }>();
   const historyFetcher = useFetcher<{ messages: ChatMessageRecord[] }>();
+  const chatsFetcher = useFetcher<{ chats: ChatSummary[] }>();
   const configFetcher = useFetcher<{ lokte: LokteConfig; aiAssistantEnabled: boolean; devForceNotConfigured: boolean }>();
   const faqFetcher = useFetcher<{ faqQuestions: string[] | null; faqLastGeneratedAt: string | null }>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>(DEFAULT_FAQ_QUESTIONS);
   // true when the user navigated away while the AI was processing and we're polling for the result
   const [isRestoredThinking, setIsRestoredThinking] = useState(false);
   // Ref mirror so effects can read the current value without re-running on every state change
   const isRestoredThinkingRef = useRef(false);
   const pendingQuestionRef = useRef<string | null>(null);
+
+  // ── Multi-chat state ────────────────────────────────────────────────────────
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const activeChatIdRef = useRef<string | null>(null);
+  // Guard: chatsFetcher effect must only auto-activate + load history on the initial mount load.
+  // Subsequent refreshes (e.g. after a new chat is created) should only update the sidebar list.
+  const initialChatLoadDone = useRef(false);
+  useEffect(() => { activeChatIdRef.current = activeChatId; }, [activeChatId]);
 
   const lokteConfig: LokteConfig | null = (configFetcher.data?.lokte as LokteConfig) ?? null;
   const aiAssistantEnabled = configFetcher.data?.aiAssistantEnabled !== false; // true until data arrives (avoid flicker)
@@ -634,7 +667,7 @@ export default function AssistantPage() {
     }
   }, [faqFetcher.data]);
 
-  // Load Lokte config + chat history + FAQ suggestions on mount
+  // Load Lokte config + chats list + FAQ suggestions on mount
   useEffect(() => {
     (async () => {
       const sessionToken = await shopify.idToken();
@@ -642,8 +675,8 @@ export default function AssistantPage() {
         { intent: "loadLokte", sessionToken, shopId },
         { method: "POST", encType: "application/json" },
       );
-      historyFetcher.submit(
-        { intent: "loadHistory", sessionToken, shopId },
+      chatsFetcher.submit(
+        { intent: "loadChats", sessionToken, shopId },
         { method: "POST", encType: "application/json" },
       );
       faqFetcher.submit(
@@ -656,6 +689,51 @@ export default function AssistantPage() {
 
   // Sync ref so effects can read isRestoredThinking without stale closures
   useEffect(() => { isRestoredThinkingRef.current = isRestoredThinking; }, [isRestoredThinking]);
+
+  // When chats list loads: update sidebar list; auto-activate on initial mount only.
+  useEffect(() => {
+    if (chatsFetcher.data?.chats === undefined) return;
+    const loadedChats = chatsFetcher.data.chats;
+    setChats(loadedChats);
+
+    // Subsequent refreshes (e.g. after a new chat is created) only update the list —
+    // do NOT override activeChatId or reload history, that would wipe the current view.
+    if (initialChatLoadDone.current) return;
+    initialChatLoadDone.current = true;
+
+    if (loadedChats.length === 0) {
+      // No chats yet — show empty state immediately
+      setHistoryReady(true);
+      return;
+    }
+
+    // Check sessionStorage for a pending message that belongs to a specific chat
+    let targetChatId: string = loadedChats[0].id;
+    try {
+      const raw = sessionStorage.getItem("ai-chat-pending");
+      if (raw) {
+        const pending = JSON.parse(raw) as { message: string; shopId: string; chatId?: string; ts: number };
+        const ageOk = Date.now() - (pending.ts ?? 0) < 10 * 60 * 1000;
+        if (pending.shopId === shopId && ageOk && pending.chatId) {
+          const found = loadedChats.find((c) => c.id === pending.chatId);
+          if (found) targetChatId = found.id;
+        }
+      }
+    } catch { /* ignore */ }
+
+    setActiveChatId(targetChatId);
+    activeChatIdRef.current = targetChatId;
+
+    // Load history for the target chat
+    (async () => {
+      const sessionToken = await shopify.idToken();
+      historyFetcher.submit(
+        { intent: "loadHistory", sessionToken, shopId, chatId: targetChatId },
+        { method: "POST", encType: "application/json" },
+      );
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatsFetcher.data]);
 
   // Hydrate messages from history. Runs on first load and on every poll while waiting for AI.
   useEffect(() => {
@@ -675,7 +753,7 @@ export default function AssistantPage() {
       try {
         const raw = sessionStorage.getItem("ai-chat-pending");
         if (raw) {
-          const pending = JSON.parse(raw) as { message: string; shopId: string; ts: number };
+          const pending = JSON.parse(raw) as { message: string; shopId: string; chatId?: string; ts: number };
           const ageOk = Date.now() - (pending.ts ?? 0) < 10 * 60 * 1000;
           if (pending.shopId === shopId && ageOk) {
             const lastUserInMsgs = [...msgs].reverse().find((m) => m.role === "user");
@@ -683,10 +761,8 @@ export default function AssistantPage() {
             const successInHistory = alreadyInHistory && msgs[msgs.length - 1]?.role === "assistant";
 
             if (successInHistory) {
-              // History already has the complete exchange (AI responded before we navigated back)
               sessionStorage.removeItem("ai-chat-pending");
             } else {
-              // Answer not yet in history — restore user bubble and start polling
               pendingQuestionRef.current = pending.message;
               isRestoredThinkingRef.current = true;
               setIsRestoredThinking(true);
@@ -711,15 +787,15 @@ export default function AssistantPage() {
         msgs[msgs.length - 1]?.role === "assistant";
 
       if (answerInHistory) {
-        // Replace the full messages array with authoritative DB history — this clears the
-        // temporary "pending-user" id placeholder and gives every message a real DB UUID.
         setMessages(msgs);
         isRestoredThinkingRef.current = false;
         setIsRestoredThinking(false);
         pendingQuestionRef.current = null;
         try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
       }
-      // If not yet — do nothing; the polling effect will schedule the next fetch
+    } else {
+      // ── Chat switch: historyReady is already true, just swap messages ─────
+      setMessages(msgs);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyFetcher.data]);
@@ -733,7 +809,7 @@ export default function AssistantPage() {
       const sessionToken = await shopify.idToken();
       if (!cancelled) {
         historyFetcher.submit(
-          { intent: "loadHistory", sessionToken, shopId },
+          { intent: "loadHistory", sessionToken, shopId, chatId: activeChatIdRef.current },
           { method: "POST", encType: "application/json" },
         );
       }
@@ -750,10 +826,10 @@ export default function AssistantPage() {
     el.style.height = `${Math.min(el.scrollHeight, theme.sizes.textareaMaxHeight)}px`;
   }, [inputValue]);
 
-  // Reset confirmClear once the clear action finishes
+  // Reset confirmClearAll once the clear-all action finishes
   useEffect(() => {
-    if (clearFetcher.state === "idle" && clearFetcher.data?.cleared) {
-      setConfirmClear(false);
+    if (clearFetcher.state === "idle" && clearFetcher.data && "cleared" in clearFetcher.data) {
+      setConfirmClearAll(false);
     }
   }, [clearFetcher.state, clearFetcher.data]);
 
@@ -779,18 +855,21 @@ export default function AssistantPage() {
       // Persist BEFORE the async idToken call — if the user navigates during idToken(),
       // the JS context is destroyed and nothing after the await would execute.
       try {
-        const payload = JSON.stringify({ message: trimmed, shopId, ts: Date.now() });
+        const payload = JSON.stringify({ message: trimmed, shopId, chatId: activeChatIdRef.current, ts: Date.now() });
         sessionStorage.setItem("ai-chat-pending", payload);
       } catch { /* ignore sessionStorage errors */ }
 
       const sessionToken = await shopify.idToken();
 
       // fetcher is intentionally omitted from deps — useFetcher() returns a stable reference in Remix v2
-      fetcher.submit(JSON.stringify({ message: trimmed, sessionToken }), {
-        method: "POST",
-        action: "/api/chat",
-        encType: "application/json",
-      });
+      fetcher.submit(
+        JSON.stringify({ message: trimmed, sessionToken, ...(activeChatIdRef.current ? { chatId: activeChatIdRef.current } : {}) }),
+        {
+          method: "POST",
+          action: "/api/chat",
+          encType: "application/json",
+        },
+      );
     },
     [isLoading, configured, shopify], // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -806,6 +885,20 @@ export default function AssistantPage() {
     if (fetcher.state === "idle" && fetcher.data && historyReady && !isRestoredThinkingRef.current) {
       const data = fetcher.data;
       if ("reply" in data) {
+        // If the backend created a new chat session, update our chat list + activeChatId
+        if (data.chatId && data.chatId !== activeChatIdRef.current) {
+          const newChatId = data.chatId;
+          setActiveChatId(newChatId);
+          activeChatIdRef.current = newChatId;
+          // Refresh chats list to pick up the new entry with its auto-generated title
+          (async () => {
+            const sessionToken = await shopify.idToken();
+            chatsFetcher.submit(
+              { intent: "loadChats", sessionToken, shopId },
+              { method: "POST", encType: "application/json" },
+            );
+          })();
+        }
         setMessages((prev) => [
           ...prev,
           {
@@ -828,22 +921,97 @@ export default function AssistantPage() {
       pendingQuestionRef.current = null;
       try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
     }
-  }, [fetcher.state, fetcher.data, historyReady]);
+  }, [fetcher.state, fetcher.data, historyReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleClear = useCallback(async () => {
-    if (!confirmClear) { setConfirmClear(true); return; }
-    setConfirmClear(false);
+  /** Delete a single chat — direct delete, no double-click confirmation needed */
+  const handleDeleteChat = useCallback(async (chatId: string) => {
+    // Optimistically remove from sidebar
+    setChats((prev) => prev.filter((c) => c.id !== chatId));
+
+    // If this was the active chat, switch to the next available one
+    if (activeChatIdRef.current === chatId) {
+      setChats((prev) => {
+        const remaining = prev.filter((c) => c.id !== chatId);
+        const next = remaining[0] ?? null;
+        setActiveChatId(next?.id ?? null);
+        activeChatIdRef.current = next?.id ?? null;
+        if (next) {
+          (async () => {
+            const sessionToken = await shopify.idToken();
+            historyFetcher.submit(
+              { intent: "loadHistory", sessionToken, shopId, chatId: next.id },
+              { method: "POST", encType: "application/json" },
+            );
+          })();
+        } else {
+          setMessages([]);
+          setHistoryReady(true);
+        }
+        return remaining;
+      });
+    }
+
+    setIsRestoredThinking(false);
+    isRestoredThinkingRef.current = false;
+    pendingQuestionRef.current = null;
+    try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
+
+    const sessionToken = await shopify.idToken();
+    clearFetcher.submit(
+      JSON.stringify({ intent: "clearHistory", sessionToken, shopId, chatId }),
+      { method: "POST", encType: "application/json" },
+    );
+  }, [shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Clear ALL chat sessions */
+  const handleClearAll = useCallback(async () => {
+    if (!confirmClearAll) { setConfirmClearAll(true); return; }
+    setConfirmClearAll(false);
+    setChats([]);
     setMessages([]);
+    setActiveChatId(null);
+    activeChatIdRef.current = null;
     setIsRestoredThinking(false);
     isRestoredThinkingRef.current = false;
     pendingQuestionRef.current = null;
     try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
     const sessionToken = await shopify.idToken();
     clearFetcher.submit(
-      JSON.stringify({ intent: "clearHistory", sessionToken, shopId }),
+      JSON.stringify({ intent: "clearAllHistory", sessionToken, shopId }),
       { method: "POST", encType: "application/json" },
     );
-  }, [confirmClear, shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [confirmClearAll, shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Start a fresh (empty) chat — first message will create the session */
+  const handleNewChat = useCallback(() => {
+    setSidebarOpen(false);
+    setActiveChatId(null);
+    activeChatIdRef.current = null;
+    setMessages([]);
+    setIsRestoredThinking(false);
+    isRestoredThinkingRef.current = false;
+    pendingQuestionRef.current = null;
+    try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
+    setHistoryReady(true);
+  }, []);
+
+  /** Switch to an existing chat */
+  const handleSwitchChat = useCallback(async (chatId: string) => {
+    if (chatId === activeChatIdRef.current) { setSidebarOpen(false); return; }
+    setSidebarOpen(false);
+    setActiveChatId(chatId);
+    activeChatIdRef.current = chatId;
+    setMessages([]);
+    setHistoryReady(false);
+    setIsRestoredThinking(false);
+    isRestoredThinkingRef.current = false;
+    pendingQuestionRef.current = null;
+    const sessionToken = await shopify.idToken();
+    historyFetcher.submit(
+      { intent: "loadHistory", sessionToken, shopId, chatId },
+      { method: "POST", encType: "application/json" },
+    );
+  }, [shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -971,8 +1139,205 @@ export default function AssistantPage() {
         background: theme.colors.pageBackground,
         fontFamily: theme.typography.fontFamily,
         color: theme.colors.textPrimary,
+        position: "relative",
+        overflow: "hidden",
       }}
     >
+      {/* ── Collapsible chat history sidebar ── */}
+      {sidebarOpen && (
+        <>
+          {/* Backdrop */}
+          <div
+            onClick={() => setSidebarOpen(false)}
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: "rgba(0,0,0,0.25)",
+              zIndex: 100,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              bottom: 0,
+              width: "280px",
+              background: theme.colors.surface,
+              borderRight: `1px solid ${theme.colors.borderSubtle}`,
+              display: "flex",
+              flexDirection: "column",
+              zIndex: 101,
+              boxShadow: "2px 0 12px rgba(0,0,0,0.12)",
+            }}
+          >
+            {/* Sidebar header */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                borderBottom: `1px solid ${theme.colors.borderSubtle}`,
+                flexShrink: 0,
+              }}
+            >
+              <span style={{ fontWeight: 600, fontSize: theme.typography.body, color: theme.colors.textPrimary }}>
+                Chat History
+              </span>
+              <button
+                type="button"
+                onClick={handleNewChat}
+                title="Start a new chat"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: `4px ${theme.spacing.sm}`,
+                  border: `1px solid ${theme.colors.border}`,
+                  borderRadius: theme.radius.button,
+                  background: "transparent",
+                  color: theme.colors.brand,
+                  fontSize: theme.typography.small,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                New chat
+              </button>
+            </div>
+
+            {/* Chat list */}
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              {chats.length === 0 ? (
+                <div style={{ padding: theme.spacing.lg, color: theme.colors.textMuted, fontSize: theme.typography.small, textAlign: "center" }}>
+                  No previous chats
+                </div>
+              ) : (
+                chats.map((chat) => (
+                  <div
+                    key={chat.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: theme.spacing.xs,
+                      padding: `10px ${theme.spacing.md}`,
+                      cursor: "pointer",
+                      background: activeChatId === chat.id ? theme.colors.suggestionHover : "transparent",
+                      borderLeft: activeChatId === chat.id ? `3px solid ${theme.colors.brand}` : "3px solid transparent",
+                      transition: `background ${theme.transitions.fast}`,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (activeChatId !== chat.id)
+                        (e.currentTarget as HTMLDivElement).style.background = theme.colors.pageBackground;
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activeChatId !== chat.id)
+                        (e.currentTarget as HTMLDivElement).style.background = "transparent";
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void handleSwitchChat(chat.id)}
+                      style={{
+                        flex: 1,
+                        textAlign: "left",
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        minWidth: 0,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: theme.typography.small,
+                          color: activeChatId === chat.id ? theme.colors.textPrimary : theme.colors.textSecondary,
+                          fontWeight: activeChatId === chat.id ? 500 : 400,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {chat.title || "New conversation"}
+                      </div>
+                    </button>
+                    {/* Per-chat delete button */}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); void handleDeleteChat(chat.id); }}
+                      title="Delete this chat"
+                      aria-label="Delete chat"
+                      style={{
+                        flexShrink: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: "24px",
+                        height: "24px",
+                        borderRadius: theme.radius.button,
+                        border: "none",
+                        background: "transparent",
+                        color: theme.colors.textMuted,
+                        cursor: "pointer",
+                        opacity: 0.6,
+                        transition: `opacity ${theme.transitions.fast}`,
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "1"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "0.6"; }}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
+                      </svg>
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Sidebar footer — Clear all */}
+            {chats.length > 0 && (
+              <div
+                style={{
+                  flexShrink: 0,
+                  borderTop: `1px solid ${theme.colors.borderSubtle}`,
+                  padding: theme.spacing.sm,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => void handleClearAll()}
+                  onBlur={() => setConfirmClearAll(false)}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: theme.spacing.xs,
+                    padding: `7px ${theme.spacing.sm}`,
+                    border: `1px solid ${confirmClearAll ? theme.colors.errorBorder : theme.colors.border}`,
+                    borderRadius: theme.radius.button,
+                    background: confirmClearAll ? theme.colors.errorBg : "transparent",
+                    color: confirmClearAll ? theme.colors.errorText : theme.colors.textMuted,
+                    fontSize: theme.typography.small,
+                    cursor: "pointer",
+                    transition: `background ${theme.transitions.fast}, color ${theme.transitions.fast}, border-color ${theme.transitions.fast}`,
+                  }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
+                  </svg>
+                  {confirmClearAll ? "Confirm? Clear all" : "Clear all history"}
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
       {/* ── Not-configured notice ── */}
       {configChecked && !configured && (
         <div
@@ -1058,96 +1423,129 @@ export default function AssistantPage() {
         </div>
       )}
 
-      {/* ── Chat header — only shown in active conversation ── */}
-      {hasMessages && historyReady && (
+      {/* ── Persistent top header ── */}
+      <div
+        style={{
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          gap: theme.spacing.sm,
+          padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
+          borderBottom: `1px solid ${theme.colors.borderSubtle}`,
+          background: theme.colors.surface,
+        }}
+      >
+        {/* History toggle button */}
+        <button
+          type="button"
+          onClick={() => setSidebarOpen((o) => !o)}
+          aria-label="Toggle chat history"
+          title="Chat history"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: theme.spacing.xs,
+            padding: `6px ${theme.spacing.sm}`,
+            border: `1px solid ${theme.colors.border}`,
+            borderRadius: theme.radius.button,
+            background: sidebarOpen ? theme.colors.suggestionHover : "transparent",
+            color: theme.colors.textSecondary,
+            fontSize: theme.typography.small,
+            cursor: "pointer",
+            transition: `background ${theme.transitions.fast}`,
+          }}
+          onMouseEnter={(e) => {
+            if (!sidebarOpen) (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover;
+          }}
+          onMouseLeave={(e) => {
+            if (!sidebarOpen) (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+          }}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="15" y2="18"/>
+          </svg>
+          History
+          {chats.length > 0 && (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                minWidth: "18px",
+                height: "18px",
+                padding: "0 4px",
+                borderRadius: "9px",
+                background: theme.colors.brand,
+                color: theme.colors.white,
+                fontSize: "11px",
+                fontWeight: 600,
+                lineHeight: 1,
+              }}
+            >
+              {chats.length}
+            </span>
+          )}
+        </button>
+
+        {/* New chat button */}
+        <button
+          type="button"
+          onClick={handleNewChat}
+          title="Start a new chat"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: theme.spacing.xs,
+            padding: `6px ${theme.spacing.sm}`,
+            border: `1px solid ${theme.colors.border}`,
+            borderRadius: theme.radius.button,
+            background: "transparent",
+            color: theme.colors.textSecondary,
+            fontSize: theme.typography.small,
+            cursor: "pointer",
+            transition: `background ${theme.transitions.fast}`,
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          New chat
+        </button>
+
+        {/* AI Assistant label — right aligned */}
         <div
           style={{
-            flexShrink: 0,
             display: "flex",
             alignItems: "center",
             gap: theme.spacing.sm,
-            padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
-            borderBottom: `1px solid ${theme.colors.borderSubtle}`,
-            background: theme.colors.surface,
+            marginLeft: "auto",
           }}
         >
-          <div style={{ position: "relative" }}>
-            <button
-              type="button"
-              onClick={() => void handleClear()}
-              onBlur={() => setConfirmClear(false)}
-              aria-label={confirmClear ? "Confirm — this will erase the conversation" : "Start a new chat (clears current conversation)"}
-              title={confirmClear ? "" : "Start a new chat — clears current conversation history"}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: theme.spacing.xs,
-                padding: `6px ${theme.spacing.sm}`,
-                border: `1px solid ${confirmClear ? theme.colors.errorBorder : theme.colors.border}`,
-                borderRadius: theme.radius.button,
-                background: confirmClear ? theme.colors.errorBg : "transparent",
-                color: confirmClear ? theme.colors.errorText : theme.colors.textSecondary,
-                fontSize: theme.typography.small,
-                cursor: "pointer",
-                transition: `background ${theme.transitions.fast}, color ${theme.transitions.fast}, border-color ${theme.transitions.fast}`,
-              }}
-              onMouseEnter={(e) => {
-                if (!confirmClear)
-                  (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover;
-              }}
-              onMouseLeave={(e) => {
-                if (!confirmClear)
-                  (e.currentTarget as HTMLButtonElement).style.background = "transparent";
-              }}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                {confirmClear
-                  ? <><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></>
-                  : <><path d="M12 5v14M5 12l7-7 7 7"/></>}
-              </svg>
-              {confirmClear ? "Confirm? (clear history)" : "New chat"}
-            </button>
-          </div>
-          <div
+          <img
+            src="/assets/logo.png"
+            alt="AI Assistant"
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: theme.spacing.sm,
-              marginLeft: "auto",
+              width: theme.sizes.avatar,
+              height: theme.sizes.avatar,
+              borderRadius: theme.radius.button,
+              objectFit: "contain",
+            }}
+          />
+          <span
+            style={{
+              fontSize: theme.typography.small,
+              fontWeight: 500,
+              color: theme.colors.textPrimary,
             }}
           >
-            <img
-              src="/assets/logo.png"
-              alt="AI Assistant"
-              style={{
-                width: theme.sizes.avatar,
-                height: theme.sizes.avatar,
-                borderRadius: theme.radius.button,
-                objectFit: "contain",
-              }}
-            />
-            <span
-              style={{
-                fontSize: theme.typography.small,
-                fontWeight: 500,
-                color: theme.colors.textPrimary,
-              }}
-            >
-              AI Assistant
-            </span>
-          </div>
+            AI Assistant
+          </span>
         </div>
-      )}
+      </div>
 
       {/* ── Scrollable messages (or centered empty state) ── */}
       <div

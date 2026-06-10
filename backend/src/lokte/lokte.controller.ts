@@ -13,7 +13,7 @@ import {
 import { Request } from 'express';
 import { ShopifySessionGuard } from '../auth/guards/shopify-session.guard';
 import { ShopParamGuard } from '../auth/guards/shop-param.guard';
-import { LokteService, SourceDocument } from './lokte.service';
+import { LokteService, SourceDocument, ChatSummary } from './lokte.service';
 import { AskQuestionDto } from './dtos/ask-question.dto';
 import { ChatMessage } from './entities/chat-message.entity';
 
@@ -24,23 +24,45 @@ type AuthedRequest = Request & { shopifyUserId: string };
 export class LokteController {
   constructor(private readonly lokteService: LokteService) {}
 
-  /** GET /lokte/:shopId/history */
-  @Get(':shopId/history')
-  getHistory(
+  /** GET /lokte/:shopId/chats — list all chat sessions for the user */
+  @Get(':shopId/chats')
+  listChats(
     @Param('shopId') shopId: string,
     @Req() req: AuthedRequest,
-  ): Promise<ChatMessage[]> {
-    return this.lokteService.getHistory(shopId, req.shopifyUserId);
+  ): Promise<ChatSummary[]> {
+    return this.lokteService.listChats(shopId, req.shopifyUserId);
   }
 
-  /** DELETE /lokte/:shopId/history */
+  /** GET /lokte/:shopId/chats/:chatId/history — messages for a specific chat */
+  @Get(':shopId/chats/:chatId/history')
+  getHistory(
+    @Param('shopId') shopId: string,
+    @Param('chatId') chatId: string,
+    @Req() req: AuthedRequest,
+  ): Promise<ChatMessage[]> {
+    return this.lokteService.getHistory(shopId, req.shopifyUserId, chatId);
+  }
+
+  /** DELETE /lokte/:shopId/chats/:chatId — delete a single chat */
+  @Delete(':shopId/chats/:chatId')
+  @HttpCode(HttpStatus.OK)
+  async deleteChat(
+    @Param('shopId') shopId: string,
+    @Param('chatId') chatId: string,
+    @Req() req: AuthedRequest,
+  ): Promise<{ deleted: boolean }> {
+    await this.lokteService.deleteChat(shopId, req.shopifyUserId, chatId);
+    return { deleted: true };
+  }
+
+  /** DELETE /lokte/:shopId/history — clear ALL chat history for the user */
   @Delete(':shopId/history')
   @HttpCode(HttpStatus.OK)
-  async clearHistory(
+  async clearAllHistory(
     @Param('shopId') shopId: string,
     @Req() req: AuthedRequest,
   ): Promise<{ cleared: boolean }> {
-    await this.lokteService.clearHistory(shopId, req.shopifyUserId);
+    await this.lokteService.clearAllHistory(shopId, req.shopifyUserId);
     return { cleared: true };
   }
 
@@ -51,7 +73,7 @@ export class LokteController {
     @Param('shopId') shopId: string,
     @Body() dto: AskQuestionDto,
     @Req() req: AuthedRequest,
-  ): Promise<{ answer: string; documents: SourceDocument[] }> {
-    return this.lokteService.askQuestion(shopId, req.shopifyUserId, dto.question);
+  ): Promise<{ answer: string; documents: SourceDocument[]; chatId: string }> {
+    return this.lokteService.askQuestion(shopId, req.shopifyUserId, dto.question, dto.chatId);
   }
 }

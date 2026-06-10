@@ -12,7 +12,10 @@ import { DevToolsModule } from './dev-tools/dev-tools.module';
 import { InitialSchema1714284000000 } from './database/migrations/1714284000000-InitialSchema';
 import { AddCoreConfig1745798400000 } from './database/migrations/1745798400000-AddCoreConfig';
 import { AddChatTables1747650000000 } from './database/migrations/1747650000000-AddChatTables';
+import { AddDocumentsToChatMessages1748340000000 } from './database/migrations/1748340000000-AddDocumentsToChatMessages';
 import { AddFaqTables1748700000000 } from './database/migrations/1748700000000-AddFaqTables';
+import { AddMultipleChatSupport1749470000000 } from './database/migrations/1749470000000-AddMultipleChatSupport';
+import { MakeLokteSessionIdNullable1749556000000 } from './database/migrations/1749556000000-MakeLokteSessionIdNullable';
 
 const devOnlyModules = process.env.NODE_ENV !== 'production' ? [DevToolsModule] : [];
 
@@ -34,7 +37,7 @@ const devOnlyModules = process.env.NODE_ENV !== 'production' ? [DevToolsModule] 
         database: config.getOrThrow<string>('DB_NAME'),
         synchronize: false,
         autoLoadEntities: true,
-        migrations: [InitialSchema1714284000000, AddCoreConfig1745798400000, AddChatTables1747650000000, AddFaqTables1748700000000],
+        migrations: [InitialSchema1714284000000, AddCoreConfig1745798400000, AddChatTables1747650000000, AddDocumentsToChatMessages1748340000000, AddFaqTables1748700000000, AddMultipleChatSupport1749470000000, MakeLokteSessionIdNullable1749556000000],
         migrationsRun: true,
       }),
     }),
