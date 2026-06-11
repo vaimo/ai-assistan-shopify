@@ -8,6 +8,12 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { AssistantHeader } from "~/components/AssistantHeader";
+import { ChatHistoryDialog } from "~/components/ChatHistoryDialog";
+import { ChatInputBox } from "~/components/ChatInputBox";
+import { ChatLoadingSpinner } from "~/components/ChatLoadingSpinner";
+import { EmptyChatState } from "~/components/EmptyChatState";
+import { NotConfiguredNotice } from "~/components/NotConfiguredNotice";
 import { assistantTheme as theme } from "~/styles/assistant-theme";
 
 // ── DEV / TEST FLAGS ────────────────────────────────────────────────────────
@@ -15,7 +21,7 @@ import { assistantTheme as theme } from "~/styles/assistant-theme";
 // (backend DevToolsModule, non-production only). No hardcoded constants here.
 // ────────────────────────────────────────────────────────────────────────────
 
-import { clearChatHistory, type ChatMessageRecord } from "~/backend.server";
+import { clearAllChatHistory, type ChatMessageRecord, type ChatSummary } from "~/backend.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -24,10 +30,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  const { intent, sessionToken, shopId } = await request.json() as {
+  const { intent, sessionToken, shopId, chatId } = await request.json() as {
     intent: string;
     sessionToken: string;
     shopId: string;
+    chatId?: string;
   };
 
   // Prevent a tampered request body from targeting a different shop
@@ -35,19 +42,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (intent === "clearHistory") {
-    await clearChatHistory(session.shop, sessionToken);
-    return json({ cleared: true });
+  if (intent === "loadChats") {
+    const backendUrl = process.env.BACKEND_URL;
+    const res = await fetch(
+      `${backendUrl}/lokte/${session.shop}/chats`,
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
+    );
+    const chats = res.ok ? await res.json() : [];
+    return json({ chats });
   }
 
   if (intent === "loadHistory") {
+    if (!chatId) return json({ messages: [] });
     const backendUrl = process.env.BACKEND_URL;
     const res = await fetch(
-      `${backendUrl}/lokte/${session.shop}/history`,
+      `${backendUrl}/lokte/${session.shop}/chats/${chatId}/history`,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
     const messages = res.ok ? await res.json() : [];
     return json({ messages });
+  }
+
+  if (intent === "clearHistory") {
+    if (!chatId) return json({ deleted: false });
+    const backendUrl = process.env.BACKEND_URL;
+    const res = await fetch(
+      `${backendUrl}/lokte/${session.shop}/chats/${chatId}`,
+      { method: "DELETE", headers: { Authorization: `Bearer ${sessionToken}` } },
+    );
+    return json({ deleted: res.ok });
+  }
+
+  if (intent === "clearAllHistory") {
+    await clearAllChatHistory(session.shop, sessionToken);
+    return json({ cleared: true });
   }
 
   if (intent === "loadLokte") {
@@ -103,7 +131,7 @@ interface SourceDocument {
   updated_at: string | null;
 }
 
-type ChatApiResponse = { reply: string; documents: SourceDocument[] } | { error: string };
+type ChatApiResponse = { reply: string; documents: SourceDocument[]; chatId: string | null } | { error: string };
 
 interface LokteConfig {
   general?: {
@@ -601,20 +629,36 @@ export default function AssistantPage() {
   const [historyReady, setHistoryReady] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const fetcher = useFetcher<ChatApiResponse>();
-  const clearFetcher = useFetcher<{ cleared: boolean }>();
+  const clearFetcher = useFetcher<{ deleted?: boolean; cleared?: boolean }>();
   const historyFetcher = useFetcher<{ messages: ChatMessageRecord[] }>();
+  const chatsFetcher = useFetcher<{ chats: ChatSummary[] }>();
   const configFetcher = useFetcher<{ lokte: LokteConfig; aiAssistantEnabled: boolean; devForceNotConfigured: boolean }>();
   const faqFetcher = useFetcher<{ faqQuestions: string[] | null; faqLastGeneratedAt: string | null }>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>(DEFAULT_FAQ_QUESTIONS);
   // true when the user navigated away while the AI was processing and we're polling for the result
   const [isRestoredThinking, setIsRestoredThinking] = useState(false);
   // Ref mirror so effects can read the current value without re-running on every state change
   const isRestoredThinkingRef = useRef(false);
   const pendingQuestionRef = useRef<string | null>(null);
+  // Track the last fetcher.data we already processed so the resolve effect doesn't re-fire
+  // when historyReady transitions false→true (chat switch) with stale data from a previous chat.
+  const lastProcessedFetcherData = useRef<unknown>(null);
+
+  // ── Multi-chat state ────────────────────────────────────────────────────────
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const activeChatIdRef = useRef<string | null>(null);
+  // Guard: chatsFetcher effect must only auto-activate + load history on the initial mount load.
+  // Subsequent refreshes (e.g. after a new chat is created) should only update the dialog list.
+  const initialChatLoadDone = useRef(false);
+  // Detect real fetch completions: only process history when fetcher transitions non-idle → idle.
+  const prevHistoryFetcherState = useRef<string>("idle");
+  useEffect(() => { activeChatIdRef.current = activeChatId; }, [activeChatId]);
 
   const lokteConfig: LokteConfig | null = (configFetcher.data?.lokte as LokteConfig) ?? null;
   const aiAssistantEnabled = configFetcher.data?.aiAssistantEnabled !== false; // true until data arrives (avoid flicker)
@@ -634,7 +678,7 @@ export default function AssistantPage() {
     }
   }, [faqFetcher.data]);
 
-  // Load Lokte config + chat history + FAQ suggestions on mount
+  // Load Lokte config + chats list + FAQ suggestions on mount
   useEffect(() => {
     (async () => {
       const sessionToken = await shopify.idToken();
@@ -642,8 +686,8 @@ export default function AssistantPage() {
         { intent: "loadLokte", sessionToken, shopId },
         { method: "POST", encType: "application/json" },
       );
-      historyFetcher.submit(
-        { intent: "loadHistory", sessionToken, shopId },
+      chatsFetcher.submit(
+        { intent: "loadChats", sessionToken, shopId },
         { method: "POST", encType: "application/json" },
       );
       faqFetcher.submit(
@@ -657,8 +701,59 @@ export default function AssistantPage() {
   // Sync ref so effects can read isRestoredThinking without stale closures
   useEffect(() => { isRestoredThinkingRef.current = isRestoredThinking; }, [isRestoredThinking]);
 
-  // Hydrate messages from history. Runs on first load and on every poll while waiting for AI.
+  // When chats list loads: update dialog list; auto-activate on initial mount only.
   useEffect(() => {
+    if (chatsFetcher.data?.chats === undefined) return;
+    const loadedChats = chatsFetcher.data.chats;
+    setChats(loadedChats);
+
+    // Subsequent refreshes (e.g. after a new chat is created) only update the list —
+    // do NOT override activeChatId or reload history, that would wipe the current view.
+    if (initialChatLoadDone.current) return;
+    initialChatLoadDone.current = true;
+
+    if (loadedChats.length === 0) {
+      // No chats yet — show empty state immediately
+      setHistoryReady(true);
+      return;
+    }
+
+    // Check sessionStorage for a pending message that belongs to a specific chat
+    let targetChatId: string = loadedChats[0].id;
+    try {
+      const raw = sessionStorage.getItem("ai-chat-pending");
+      if (raw) {
+        const pending = JSON.parse(raw) as { message: string; shopId: string; chatId?: string; ts: number };
+        const ageOk = Date.now() - (pending.ts ?? 0) < 10 * 60 * 1000;
+        if (pending.shopId === shopId && ageOk && pending.chatId) {
+          const found = loadedChats.find((c) => c.id === pending.chatId);
+          if (found) targetChatId = found.id;
+        }
+      }
+    } catch { /* ignore */ }
+
+    setActiveChatId(targetChatId);
+    activeChatIdRef.current = targetChatId;
+
+    // Load history for the target chat
+    (async () => {
+      const sessionToken = await shopify.idToken();
+      historyFetcher.submit(
+        { intent: "loadHistory", sessionToken, shopId, chatId: targetChatId },
+        { method: "POST", encType: "application/json" },
+      );
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatsFetcher.data]);
+
+  // Hydrate messages from history. Only fires when historyFetcher transitions non-idle → idle,
+  // i.e. a real fetch just completed. This avoids processing stale cached data when deps change
+  // for unrelated reasons (e.g. historyReady flip during a chat switch).
+  useEffect(() => {
+    // Track state transitions; only process on non-idle → idle (a fetch just completed)
+    const wasLoading = prevHistoryFetcherState.current !== "idle";
+    prevHistoryFetcherState.current = historyFetcher.state;
+    if (!wasLoading || historyFetcher.state !== "idle") return;
     if (historyFetcher.data?.messages === undefined) return;
 
     const msgs: ChatMessage[] = historyFetcher.data.messages.map((m) => ({
@@ -670,12 +765,12 @@ export default function AssistantPage() {
     }));
 
     if (!historyReady) {
-      // ── First load after mount ─────────────────────────────────────────────
+      // ── First load after mount OR after a chat switch ─────────────────────
       let pendingMsg: ChatMessage | null = null;
       try {
         const raw = sessionStorage.getItem("ai-chat-pending");
         if (raw) {
-          const pending = JSON.parse(raw) as { message: string; shopId: string; ts: number };
+          const pending = JSON.parse(raw) as { message: string; shopId: string; chatId?: string; ts: number };
           const ageOk = Date.now() - (pending.ts ?? 0) < 10 * 60 * 1000;
           if (pending.shopId === shopId && ageOk) {
             const lastUserInMsgs = [...msgs].reverse().find((m) => m.role === "user");
@@ -683,10 +778,8 @@ export default function AssistantPage() {
             const successInHistory = alreadyInHistory && msgs[msgs.length - 1]?.role === "assistant";
 
             if (successInHistory) {
-              // History already has the complete exchange (AI responded before we navigated back)
               sessionStorage.removeItem("ai-chat-pending");
             } else {
-              // Answer not yet in history — restore user bubble and start polling
               pendingQuestionRef.current = pending.message;
               isRestoredThinkingRef.current = true;
               setIsRestoredThinking(true);
@@ -711,18 +804,18 @@ export default function AssistantPage() {
         msgs[msgs.length - 1]?.role === "assistant";
 
       if (answerInHistory) {
-        // Replace the full messages array with authoritative DB history — this clears the
-        // temporary "pending-user" id placeholder and gives every message a real DB UUID.
         setMessages(msgs);
         isRestoredThinkingRef.current = false;
         setIsRestoredThinking(false);
         pendingQuestionRef.current = null;
         try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
       }
-      // If not yet — do nothing; the polling effect will schedule the next fetch
+    } else {
+      // historyReady already true (e.g. polling refresh with no pending message)
+      setMessages(msgs);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyFetcher.data]);
+  }, [historyFetcher.state, historyFetcher.data]);
 
   // Poll history while waiting for a restored-thinking answer
   useEffect(() => {
@@ -733,7 +826,7 @@ export default function AssistantPage() {
       const sessionToken = await shopify.idToken();
       if (!cancelled) {
         historyFetcher.submit(
-          { intent: "loadHistory", sessionToken, shopId },
+          { intent: "loadHistory", sessionToken, shopId, chatId: activeChatIdRef.current },
           { method: "POST", encType: "application/json" },
         );
       }
@@ -750,10 +843,10 @@ export default function AssistantPage() {
     el.style.height = `${Math.min(el.scrollHeight, theme.sizes.textareaMaxHeight)}px`;
   }, [inputValue]);
 
-  // Reset confirmClear once the clear action finishes
+  // Reset confirmClearAll once the clear-all action finishes
   useEffect(() => {
-    if (clearFetcher.state === "idle" && clearFetcher.data?.cleared) {
-      setConfirmClear(false);
+    if (clearFetcher.state === "idle" && clearFetcher.data && "cleared" in clearFetcher.data) {
+      setConfirmClearAll(false);
     }
   }, [clearFetcher.state, clearFetcher.data]);
 
@@ -779,18 +872,21 @@ export default function AssistantPage() {
       // Persist BEFORE the async idToken call — if the user navigates during idToken(),
       // the JS context is destroyed and nothing after the await would execute.
       try {
-        const payload = JSON.stringify({ message: trimmed, shopId, ts: Date.now() });
+        const payload = JSON.stringify({ message: trimmed, shopId, chatId: activeChatIdRef.current, ts: Date.now() });
         sessionStorage.setItem("ai-chat-pending", payload);
       } catch { /* ignore sessionStorage errors */ }
 
       const sessionToken = await shopify.idToken();
 
       // fetcher is intentionally omitted from deps — useFetcher() returns a stable reference in Remix v2
-      fetcher.submit(JSON.stringify({ message: trimmed, sessionToken }), {
-        method: "POST",
-        action: "/api/chat",
-        encType: "application/json",
-      });
+      fetcher.submit(
+        JSON.stringify({ message: trimmed, sessionToken, ...(activeChatIdRef.current ? { chatId: activeChatIdRef.current } : {}) }),
+        {
+          method: "POST",
+          action: "/api/chat",
+          encType: "application/json",
+        },
+      );
     },
     [isLoading, configured, shopify], // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -802,10 +898,33 @@ export default function AssistantPage() {
   // Append assistant reply (or error) when fetcher resolves (normal flow — no navigation away).
   // Guard: skip when isRestoredThinking is active — in that flow the page was reloaded so the
   // fetcher always starts fresh (data = undefined) and the polling path owns state cleanup.
+  // Guard: skip if we already processed this exact fetcher.data object — prevents re-firing
+  // when historyReady transitions false→true after a chat switch (stale data from previous chat).
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data && historyReady && !isRestoredThinkingRef.current) {
+    if (
+      fetcher.state === "idle" &&
+      fetcher.data &&
+      historyReady &&
+      !isRestoredThinkingRef.current &&
+      fetcher.data !== lastProcessedFetcherData.current
+    ) {
+      lastProcessedFetcherData.current = fetcher.data;
       const data = fetcher.data;
       if ("reply" in data) {
+        // If the backend created a new chat session, update our chat list + activeChatId
+        if (data.chatId && data.chatId !== activeChatIdRef.current) {
+          const newChatId = data.chatId;
+          setActiveChatId(newChatId);
+          activeChatIdRef.current = newChatId;
+          // Refresh chats list to pick up the new entry with its auto-generated title
+          (async () => {
+            const sessionToken = await shopify.idToken();
+            chatsFetcher.submit(
+              { intent: "loadChats", sessionToken, shopId },
+              { method: "POST", encType: "application/json" },
+            );
+          })();
+        }
         setMessages((prev) => [
           ...prev,
           {
@@ -828,22 +947,101 @@ export default function AssistantPage() {
       pendingQuestionRef.current = null;
       try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
     }
-  }, [fetcher.state, fetcher.data, historyReady]);
+  }, [fetcher.state, fetcher.data, historyReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleClear = useCallback(async () => {
-    if (!confirmClear) { setConfirmClear(true); return; }
-    setConfirmClear(false);
+  /** Delete a single chat — direct delete, no double-click confirmation needed */
+  const handleDeleteChat = useCallback(async (chatId: string) => {
+    // Optimistically remove from the history dialog
+    setChats((prev) => prev.filter((c) => c.id !== chatId));
+
+    // If this was the active chat, switch to the next available one
+    if (activeChatIdRef.current === chatId) {
+      setChats((prev) => {
+        const remaining = prev.filter((c) => c.id !== chatId);
+        const next = remaining[0] ?? null;
+        setActiveChatId(next?.id ?? null);
+        activeChatIdRef.current = next?.id ?? null;
+        setHistoryReady(false);
+        if (next) {
+          (async () => {
+            const sessionToken = await shopify.idToken();
+            historyFetcher.submit(
+              { intent: "loadHistory", sessionToken, shopId, chatId: next.id },
+              { method: "POST", encType: "application/json" },
+            );
+          })();
+        } else {
+          setMessages([]);
+          setHistoryReady(true);
+        }
+        return remaining;
+      });
+    }
+
+    setIsRestoredThinking(false);
+    isRestoredThinkingRef.current = false;
+    pendingQuestionRef.current = null;
+    try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
+
+    const sessionToken = await shopify.idToken();
+    clearFetcher.submit(
+      JSON.stringify({ intent: "clearHistory", sessionToken, shopId, chatId }),
+      { method: "POST", encType: "application/json" },
+    );
+  }, [shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Clear ALL chat sessions */
+  const handleClearAll = useCallback(async () => {
+    if (!confirmClearAll) { setConfirmClearAll(true); return; }
+    setConfirmClearAll(false);
+    setChats([]);
     setMessages([]);
+    setActiveChatId(null);
+    activeChatIdRef.current = null;
     setIsRestoredThinking(false);
     isRestoredThinkingRef.current = false;
     pendingQuestionRef.current = null;
     try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
     const sessionToken = await shopify.idToken();
     clearFetcher.submit(
-      JSON.stringify({ intent: "clearHistory", sessionToken, shopId }),
+      JSON.stringify({ intent: "clearAllHistory", sessionToken, shopId }),
       { method: "POST", encType: "application/json" },
     );
-  }, [confirmClear, shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [confirmClearAll, shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Start a fresh (empty) chat — first message will create the session */
+  const handleNewChat = useCallback(() => {
+    setHistoryDialogOpen(false);
+    setActiveChatId(null);
+    activeChatIdRef.current = null;
+    setMessages([]);
+    setIsRestoredThinking(false);
+    isRestoredThinkingRef.current = false;
+    pendingQuestionRef.current = null;
+    lastProcessedFetcherData.current = null;
+    try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
+    setHistoryReady(true);
+  }, []);
+
+  /** Switch to an existing chat */
+  const handleSwitchChat = useCallback(async (chatId: string) => {
+    if (chatId === activeChatIdRef.current) { setHistoryDialogOpen(false); return; }
+    setHistoryDialogOpen(false);
+    setActiveChatId(chatId);
+    activeChatIdRef.current = chatId;
+    setMessages([]);
+    setHistoryReady(false);
+    setIsRestoredThinking(false);
+    isRestoredThinkingRef.current = false;
+    pendingQuestionRef.current = null;
+    // Mark current fetcher data as processed so the resolve effect skips it on historyReady flip
+    lastProcessedFetcherData.current = fetcher.data ?? null;
+    const sessionToken = await shopify.idToken();
+    historyFetcher.submit(
+      { intent: "loadHistory", sessionToken, shopId, chatId },
+      { method: "POST", encType: "application/json" },
+    );
+  }, [shopify, shopId, fetcher.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -855,110 +1053,25 @@ export default function AssistantPage() {
   function renderInputBox() {
     const inputDisabled = !configured || isLoading;
     return (
-      <div
-        style={{
-          background: theme.colors.surface,
-          border: textareaFocused
-            ? `1px solid ${theme.colors.brand}`
-            : `1px solid ${theme.colors.border}`,
-          borderRadius: theme.radius.input,
-          boxShadow: textareaFocused
-            ? theme.shadows.inputFocus
-            : theme.shadows.input,
-          overflow: "hidden",
-          transition: `border-color ${theme.transitions.fast}, box-shadow ${theme.transitions.fast}`,
-          opacity: inputDisabled && !isLoading ? 0.5 : 1,
-        }}
-      >
-        <textarea
-          ref={textareaRef}
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onFocus={() => setTextareaFocused(true)}
-          onBlur={() => setTextareaFocused(false)}
-          placeholder={
-            configured
-              ? "How can AI Assistant help you today?"
-              : !aiAssistantEnabled
-                ? "AI Assistant is disabled. Enable it in Configuration…"
-                : "Configure Lokte integration to start chatting…"
-          }
-          rows={1}
-          disabled={inputDisabled}
-          style={{
-            display: "block",
-            width: "100%",
-            padding: theme.spacing.inputPadding,
-            border: "none",
-            outline: "none",
-            resize: "none",
-            fontSize: theme.typography.base,
-            lineHeight: "1.5",
-            color: theme.colors.textPrimary,
-            background: "transparent",
-            fontFamily: "inherit",
-            overflowY: "auto",
-            boxSizing: "border-box",
-          }}
-        />
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            padding: theme.spacing.inputFooterPadding,
-            gap: theme.spacing.sm,
-          }}
-        >
-          <span
-            style={{
-              fontSize: theme.typography.small,
-              color: theme.colors.textMuted,
-              marginRight: "auto",
-              userSelect: "none",
-            }}
-          >
-            ↵ Enter to send&nbsp;&nbsp;·&nbsp;&nbsp;Shift+Enter for new line
-          </span>
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={!inputValue.trim() || inputDisabled}
-            aria-label="Send message"
-            style={{
-              width: theme.sizes.sendButton,
-              height: theme.sizes.sendButton,
-              borderRadius: theme.radius.round,
-              border: "none",
-              background:
-                !inputValue.trim() || inputDisabled
-                  ? theme.colors.disabled
-                  : theme.colors.brand,
-              cursor:
-                !inputValue.trim() || inputDisabled ? "not-allowed" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: `background ${theme.transitions.fast}`,
-              flexShrink: 0,
-            }}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width={theme.sizes.sendIcon}
-              height={theme.sizes.sendIcon}
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke={theme.colors.white}
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 19V5M5 12l7-7 7 7" />
-            </svg>
-          </button>
-        </div>
-      </div>
+      <ChatInputBox
+        textareaRef={textareaRef}
+        value={inputValue}
+        placeholder={
+          configured
+            ? "How can AI Assistant help you today?"
+            : !aiAssistantEnabled
+              ? "AI Assistant is disabled. Enable it in Configuration…"
+              : "Configure Lokte integration to start chatting…"
+        }
+        disabled={inputDisabled}
+        isLoading={isLoading}
+        focused={textareaFocused}
+        onChange={setInputValue}
+        onKeyDown={handleKeyDown}
+        onFocus={() => setTextareaFocused(true)}
+        onBlur={() => setTextareaFocused(false)}
+        onSend={handleSend}
+      />
     );
   }
 
@@ -971,183 +1084,36 @@ export default function AssistantPage() {
         background: theme.colors.pageBackground,
         fontFamily: theme.typography.fontFamily,
         color: theme.colors.textPrimary,
+        position: "relative",
+        overflow: "hidden",
       }}
     >
-      {/* ── Not-configured notice ── */}
+      <ChatHistoryDialog
+        open={historyDialogOpen}
+        chats={chats}
+        activeChatId={activeChatId}
+        confirmClearAll={confirmClearAll}
+        onClose={() => setHistoryDialogOpen(false)}
+        onNewChat={handleNewChat}
+        onSwitchChat={(chatId) => void handleSwitchChat(chatId)}
+        onDeleteChat={(chatId) => void handleDeleteChat(chatId)}
+        onClearAll={() => void handleClearAll()}
+        onClearAllBlur={() => setConfirmClearAll(false)}
+      />
+
       {configChecked && !configured && (
-        <div
-          style={{
-            flexShrink: 0,
-            padding: `${theme.spacing.md} ${theme.spacing.lg}`,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: theme.spacing.md,
-              padding: `${theme.spacing.md} ${theme.spacing.lg}`,
-              background: theme.colors.surface,
-              border: `1px solid ${theme.colors.brand}44`,
-              borderLeft: `3px solid ${theme.colors.brand}`,
-              borderRadius: theme.radius.button,
-              boxShadow: theme.shadows.bubble,
-            }}
-          >
-            {/* Warning icon in brand amber */}
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke={theme.colors.brand}
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ flexShrink: 0 }}
-            >
-              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-              <line x1="12" y1="9" x2="12" y2="13" />
-              <line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
-
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <span
-                style={{
-                  fontSize: theme.typography.body,
-                  color: theme.colors.textPrimary,
-                  fontWeight: 500,
-                }}
-              >
-                {!aiAssistantEnabled
-                  ? "AI Assistant is disabled."
-                  : "Lokte integration is not set up."}
-              </span>
-              <span
-                style={{
-                  fontSize: theme.typography.body,
-                  color: theme.colors.textSecondary,
-                  marginLeft: theme.spacing.xs,
-                }}
-              >
-                {!aiAssistantEnabled
-                  ? "Enable it in"
-                  : "Enable it and add your API key and User ID in"}
-              </span>
-              <button
-                onClick={() => navigate("/app/configuration")}
-                style={{
-                  marginLeft: theme.spacing.xs,
-                  fontSize: theme.typography.body,
-                  color: theme.colors.brand,
-                  fontWeight: 500,
-                  textDecoration: "none",
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: 0,
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.textDecoration = "underline"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.textDecoration = "none"; }}
-              >
-                Configuration →
-              </button>
-            </div>
-          </div>
-        </div>
+        <NotConfiguredNotice
+          aiAssistantEnabled={aiAssistantEnabled}
+          onOpenConfiguration={() => navigate("/app/configuration")}
+        />
       )}
 
-      {/* ── Chat header — only shown in active conversation ── */}
-      {hasMessages && historyReady && (
-        <div
-          style={{
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: theme.spacing.sm,
-            padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
-            borderBottom: `1px solid ${theme.colors.borderSubtle}`,
-            background: theme.colors.surface,
-          }}
-        >
-          <div style={{ position: "relative" }}>
-            <button
-              type="button"
-              onClick={() => void handleClear()}
-              onBlur={() => setConfirmClear(false)}
-              aria-label={confirmClear ? "Confirm — this will erase the conversation" : "Start a new chat (clears current conversation)"}
-              title={confirmClear ? "" : "Start a new chat — clears current conversation history"}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: theme.spacing.xs,
-                padding: `6px ${theme.spacing.sm}`,
-                border: `1px solid ${confirmClear ? theme.colors.errorBorder : theme.colors.border}`,
-                borderRadius: theme.radius.button,
-                background: confirmClear ? theme.colors.errorBg : "transparent",
-                color: confirmClear ? theme.colors.errorText : theme.colors.textSecondary,
-                fontSize: theme.typography.small,
-                cursor: "pointer",
-                transition: `background ${theme.transitions.fast}, color ${theme.transitions.fast}, border-color ${theme.transitions.fast}`,
-              }}
-              onMouseEnter={(e) => {
-                if (!confirmClear)
-                  (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover;
-              }}
-              onMouseLeave={(e) => {
-                if (!confirmClear)
-                  (e.currentTarget as HTMLButtonElement).style.background = "transparent";
-              }}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                {confirmClear
-                  ? <><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></>
-                  : <><path d="M12 5v14M5 12l7-7 7 7"/></>}
-              </svg>
-              {confirmClear ? "Confirm? (clear history)" : "New chat"}
-            </button>
-          </div>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: theme.spacing.sm,
-              marginLeft: "auto",
-            }}
-          >
-            <img
-              src="/assets/logo.png"
-              alt="AI Assistant"
-              style={{
-                width: theme.sizes.avatar,
-                height: theme.sizes.avatar,
-                borderRadius: theme.radius.button,
-                objectFit: "contain",
-              }}
-            />
-            <span
-              style={{
-                fontSize: theme.typography.small,
-                fontWeight: 500,
-                color: theme.colors.textPrimary,
-              }}
-            >
-              AI Assistant
-            </span>
-          </div>
-        </div>
-      )}
+      <AssistantHeader
+        historyDialogOpen={historyDialogOpen}
+        chatsCount={chats.length}
+        onToggleHistory={() => setHistoryDialogOpen((o) => !o)}
+        onNewChat={handleNewChat}
+      />
 
       {/* ── Scrollable messages (or centered empty state) ── */}
       <div
@@ -1160,139 +1126,14 @@ export default function AssistantPage() {
         }}
       >
         {!historyReady ? (
-          /* ── Spinner while history is loading ── */
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-            <div
-              style={{
-                width: "32px",
-                height: "32px",
-                borderRadius: "50%",
-                border: `2px solid ${theme.colors.brand}`,
-                borderTopColor: theme.colors.textSecondary,
-                animation: "spin 0.8s linear infinite",
-              }}
-            />
-          </div>
+          <ChatLoadingSpinner />
         ) : !hasMessages ? (
-          /* ── Empty state: 3-row grid matching expected layout ── */
-          <div
-            style={{
-              flex: 1,
-              display: "grid",
-              gridTemplateRows: "0.85fr auto 1.15fr",
-              width: "100%",
-              maxWidth: theme.sizes.maxContentWidth,
-              margin: "0 auto",
-              padding: `0 ${theme.spacing.lg}`,
-              height: "100%",
-            }}
-          >
-            {/* Row 1 — greeting aligned to bottom of its row */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "flex-end",
-                justifyContent: "center",
-                paddingBottom: theme.spacing.xxl,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: theme.spacing.lg,
-                }}
-              >
-                <img
-                  src="/assets/logo.png"
-                  alt="AI Assistant logo"
-                  style={{
-                    width: theme.sizes.logo,
-                    height: theme.sizes.logo,
-                    borderRadius: theme.radius.input,
-                    objectFit: "contain",
-                    flexShrink: 0,
-                  }}
-                />
-                <h1
-                  style={{
-                    fontSize: theme.typography.heading,
-                    fontWeight: 500,
-                    margin: 0,
-                    color: theme.colors.textPrimary,
-                    lineHeight: 1.3,
-                    maxWidth: theme.sizes.greetingMaxWidth,
-                  }}
-                >
-                  What would you like to{" "}
-                  <span style={{ color: theme.colors.brand }}>explore</span> today?
-                </h1>
-              </div>
-            </div>
-
-            {/* Row 2 — input */}
-            <div>{renderInputBox()}</div>
-
-            {/* Row 3 — suggested questions */}
-            <div style={{ marginTop: theme.spacing.xl }}>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: theme.spacing.xxs,
-                }}
-              >
-                {suggestedQuestions.map((question) => (
-                  <button
-                    key={question}
-                    type="button"
-                    disabled={!configured}
-                    onClick={() => void sendMessage(question)}
-                    style={{
-                      textAlign: "left",
-                      fontSize: theme.typography.body,
-                      margin: `0 ${theme.spacing.lg}`,
-                      padding: `10px ${theme.spacing.md}`,
-                      borderRadius: theme.radius.button,
-                      border: "none",
-                      background: "transparent",
-                      color: theme.colors.textSecondary,
-                      cursor: configured ? "pointer" : "not-allowed",
-                      opacity: configured ? 1 : 0.4,
-                      transition: `background ${theme.transitions.fast}`,
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!configured) return;
-                      (e.currentTarget as HTMLButtonElement).style.background =
-                        theme.colors.suggestionHover;
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.background =
-                        "transparent";
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontWeight: 500,
-                        color: theme.colors.textPrimary,
-                        lineHeight: 1.4,
-                      }}
-                    >
-                      {question}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          <EmptyChatState
+            inputBox={renderInputBox()}
+            suggestedQuestions={suggestedQuestions}
+            configured={configured}
+            onSelectQuestion={(question) => void sendMessage(question)}
+          />
         ) : (
           /* ── Active conversation ── */
           <div

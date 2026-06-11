@@ -11,10 +11,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   let message = "";
   let sessionToken = "";
+  let chatId: string | undefined;
   try {
-    const body = await request.json() as { message?: unknown; sessionToken?: unknown };
+    const body = await request.json() as { message?: unknown; sessionToken?: unknown; chatId?: unknown };
     message = typeof body?.message === "string" ? body.message : "";
     sessionToken = typeof body?.sessionToken === "string" ? body.sessionToken : "";
+    chatId = typeof body?.chatId === "string" ? body.chatId : undefined;
   } catch {
     return json({ error: "Invalid JSON body" }, { status: 400 });
   }
@@ -69,7 +71,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${sessionToken}`,
       },
-      body: JSON.stringify({ question: message }),
+      body: JSON.stringify({ question: message, ...(chatId ? { chatId } : {}) }),
     });
   } catch {
     return json(
@@ -94,9 +96,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  const data = await response.json() as { answer?: unknown; documents?: unknown };
+  const data = await response.json() as { answer?: unknown; documents?: unknown; chatId?: unknown };
   return json({
     reply: String(data.answer ?? ""),
     documents: Array.isArray(data.documents) ? data.documents : [],
+    chatId: typeof data.chatId === "string" ? data.chatId : null,
   });
 };

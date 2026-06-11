@@ -88,6 +88,7 @@ export interface ChatMessageRecord {
   id: string;
   shopId: string;
   userId: string;
+  chatSessionId: string;
   role: 'user' | 'assistant';
   content: string;
   isError: boolean;
@@ -95,11 +96,18 @@ export interface ChatMessageRecord {
   createdAt: string;
 }
 
+export interface ChatSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /**
- * Clears the chat history and Lokte session for the authenticated user.
+ * Clears ALL chat history for the authenticated user (all sessions).
  * User identity is derived from the Shopify session JWT on the backend.
  */
-export async function clearChatHistory(
+export async function clearAllChatHistory(
   shopId: string,
   sessionToken: string,
 ): Promise<void> {

@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   Injectable,
   Logger,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -12,7 +13,8 @@ import { ChatSession } from './entities/chat-session.entity';
 import { FaqQuestionPool } from '../faq-suggestions/entities/faq-question-pool.entity';
 
 const LOKTE_BASE_URL = 'https://lokte.vaimo.network';
-const HISTORY_LIMIT = 100; // rows kept in DB per user
+const HISTORY_LIMIT = 100; // rows kept in DB per chat session
+const TITLE_MAX_LENGTH = 80;
 
 interface CreateSessionResponse {
   id?: string;
@@ -30,6 +32,14 @@ export interface SourceDocument {
 export interface AskQuestionResult {
   answer: string;
   documents: SourceDocument[];
+  chatId: string;
+}
+
+export interface ChatSummary {
+  id: string;
+  title: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 @Injectable()
@@ -46,39 +56,92 @@ export class LokteService {
     private readonly faqPoolRepo: Repository<FaqQuestionPool>,
   ) {}
 
-  async askQuestion(shopId: string, userId: string, question: string): Promise<AskQuestionResult> {
+  /** List all chat sessions for a user, newest first. No message bodies. */
+  async listChats(shopId: string, userId: string): Promise<ChatSummary[]> {
+    const sessions = await this.sessionRepo.find({
+      where: { shopId, userId },
+      order: { updatedAt: 'DESC' },
+      select: ['id', 'title', 'createdAt', 'updatedAt'],
+    });
+    return sessions.map((s) => ({
+      id: s.id,
+      title: s.title,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+    }));
+  }
+
+  /** Send a question. If chatId is absent a new session is created lazily. Returns chatId. */
+  async askQuestion(
+    shopId: string,
+    userId: string,
+    question: string,
+    chatId?: string,
+  ): Promise<AskQuestionResult> {
     await this.assertConfigured(shopId);
 
     const token = await this.configRegistry.getDecrypted(shopId, 'lokte.general.api_key');
     const personaId = String(await this.configRegistry.get(shopId, 'lokte.general.user_id') ?? '');
 
-    const session = await this.getOrCreateSession(shopId, userId, token, personaId);
-    const result = await this.sendMessage(token, session.lokteSessionId, session.lastAssistantMsgId, question);
+    const session = chatId
+      ? await this.loadSession(shopId, userId, chatId)
+      : await this.createSession(shopId, userId, token, personaId);
 
+    const result = await this.sendMessage(token, session, personaId, question);
+
+    // Persist the updated lastAssistantMsgId
     await this.sessionRepo.update(session.id, { lastAssistantMsgId: result.reservedAssistantMsgId });
-    await this.persistMessages(shopId, userId, question, result.answer, result.documents);
 
-    return { answer: result.answer, documents: result.documents };
+    // Auto-title from first user message
+    if (!session.title) {
+      const title = question.trim().slice(0, TITLE_MAX_LENGTH);
+      await this.sessionRepo.update(session.id, { title });
+    }
+
+    await this.persistMessages(shopId, userId, session.id, question, result.answer, result.documents);
+
+    return { answer: result.answer, documents: result.documents, chatId: session.id };
   }
 
-  async getHistory(shopId: string, userId: string): Promise<ChatMessage[]> {
+  /** Return messages for a specific chat session, oldest first. */
+  async getHistory(shopId: string, userId: string, chatId: string): Promise<ChatMessage[]> {
+    await this.loadSession(shopId, userId, chatId); // ownership check
     return this.messageRepo.find({
-      where: { shopId, userId },
+      where: { chatSessionId: chatId },
       order: { createdAt: 'ASC' },
       take: HISTORY_LIMIT,
     });
   }
 
-  async clearHistory(shopId: string, userId: string): Promise<void> {
-    const session = await this.sessionRepo.findOne({ where: { shopId, userId } });
+  /** Delete a single chat session and all its messages. */
+  async deleteChat(shopId: string, userId: string, chatId: string): Promise<void> {
+    const session = await this.loadSession(shopId, userId, chatId);
 
-    if (session) {
+    if (session.lokteSessionId) {
       const token = await this.configRegistry.getDecrypted(shopId, 'lokte.general.api_key');
       await this.deleteLokteSession(token, session.lokteSessionId);
-      await this.sessionRepo.delete(session.id);
     }
 
-    await this.messageRepo.delete({ shopId, userId });
+    // FK ON DELETE CASCADE removes chat_messages automatically
+    await this.sessionRepo.delete(session.id);
+  }
+
+  /** Delete ALL chat sessions (and their messages) for a user — "Clear all history". */
+  async clearAllHistory(shopId: string, userId: string): Promise<void> {
+    const sessions = await this.sessionRepo.find({ where: { shopId, userId } });
+
+    const token = sessions.some((s) => s.lokteSessionId)
+      ? await this.configRegistry.getDecrypted(shopId, 'lokte.general.api_key').catch(() => null)
+      : null;
+
+    await Promise.all(
+      sessions.map(async (s) => {
+        if (token && s.lokteSessionId) {
+          await this.deleteLokteSession(token, s.lokteSessionId);
+        }
+        await this.sessionRepo.delete(s.id);
+      }),
+    );
   }
 
   // ── Private ──────────────────────────────────────────────────────────────────
@@ -94,34 +157,30 @@ export class LokteService {
     if (!userId) throw new ServiceUnavailableException('wrong lokte connection');
   }
 
-  private async getOrCreateSession(
+  private async loadSession(shopId: string, userId: string, chatId: string): Promise<ChatSession> {
+    const session = await this.sessionRepo.findOne({ where: { id: chatId, shopId, userId } });
+    if (!session) throw new NotFoundException(`Chat session not found: ${chatId}`);
+    return session;
+  }
+
+  /** Create a brand-new DB session row (Lokte session created lazily on first sendMessage). */
+  private async createSession(
     shopId: string,
     userId: string,
-    token: string,
-    personaId: string,
+    _token: string,
+    _personaId: string,
   ): Promise<ChatSession> {
-    const existing = await this.sessionRepo.findOne({ where: { shopId, userId } });
-    if (existing) return existing;
+    return this.sessionRepo.save(
+      this.sessionRepo.create({ shopId, userId, lokteSessionId: null, lastAssistantMsgId: null, title: '' }),
+    );
+  }
+
+  private async ensureLokteSession(token: string, personaId: string, session: ChatSession): Promise<ChatSession> {
+    if (session.lokteSessionId) return session;
 
     const lokteSessionId = await this.createLokteSession(token, personaId);
-    try {
-      return await this.sessionRepo.save(
-        this.sessionRepo.create({ shopId, userId, lokteSessionId, lastAssistantMsgId: null }),
-      );
-    } catch (err: unknown) {
-      // Unique constraint violation — another concurrent request already created the session.
-      // Clean up the orphaned Lokte session and return the winner's row.
-      const isUniqueViolation =
-        err instanceof Error && (err as NodeJS.ErrnoException & { code?: string }).code === '23505';
-      if (isUniqueViolation) {
-        this.deleteLokteSession(token, lokteSessionId).catch((e) =>
-          this.logger.warn(`Failed to clean up orphaned Lokte session ${lokteSessionId}`, e),
-        );
-        const winner = await this.sessionRepo.findOne({ where: { shopId, userId } });
-        if (winner) return winner;
-      }
-      throw err;
-    }
+    await this.sessionRepo.update(session.id, { lokteSessionId });
+    return { ...session, lokteSessionId };
   }
 
   private async createLokteSession(token: string, personaId: string): Promise<string> {
@@ -150,18 +209,21 @@ export class LokteService {
 
   private async sendMessage(
     token: string,
-    lokteSessionId: string,
-    parentMessageId: number | null,
+    session: ChatSession,
+    personaId: string,
     question: string,
   ): Promise<AskQuestionResult & { reservedAssistantMsgId: number | null }> {
+    // Ensure Lokte session exists (lazy init)
+    const hydratedSession = await this.ensureLokteSession(token, personaId, session);
+
     let response: Response;
     try {
       response = await fetch(`${LOKTE_BASE_URL}/api/chat/send-message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          chat_session_id: lokteSessionId,
-          parent_message_id: parentMessageId,
+          chat_session_id: hydratedSession.lokteSessionId,
+          parent_message_id: hydratedSession.lastAssistantMsgId,
           message: question,
           file_descriptors: [],
           prompt_id: 0,
@@ -240,7 +302,7 @@ export class LokteService {
 
     const answer = pieces.join('');
     if (!answer) this.logger.warn('Lokte send-message returned no answer content');
-    return { answer, documents, reservedAssistantMsgId };
+    return { answer, documents, chatId: session.id, reservedAssistantMsgId };
   }
 
   private async deleteLokteSession(token: string, lokteSessionId: string): Promise<void> {
@@ -258,32 +320,30 @@ export class LokteService {
   private async persistMessages(
     shopId: string,
     userId: string,
+    chatSessionId: string,
     question: string,
     answer: string,
     documents: SourceDocument[],
   ): Promise<void> {
     try {
-      // Save sequentially so the user message always gets a strictly earlier createdAt
-      // than the assistant message. A single batch save([user, assistant]) assigns both
-      // rows the same DB timestamp, causing non-deterministic ordering in production.
+      // Save sequentially so user message always has a strictly earlier createdAt than assistant
       await this.messageRepo.save(
-        this.messageRepo.create({ shopId, userId, role: 'user', content: question, documents: null }),
+        this.messageRepo.create({ shopId, userId, chatSessionId, role: 'user', content: question, documents: null }),
       );
       await this.messageRepo.save(
-        this.messageRepo.create({ shopId, userId, role: 'assistant', content: answer, documents }),
+        this.messageRepo.create({ shopId, userId, chatSessionId, role: 'assistant', content: answer, documents }),
       );
 
-      // Log the user question to the FAQ pool — persists across chat history clears,
-      // consumed by the FAQ generation cron and cleared after each successful run.
+      // Log question to FAQ pool — persists across chat clears
       await this.faqPoolRepo.save(this.faqPoolRepo.create({ shopId, question })).catch((e) =>
         this.logger.warn('Failed to append question to faq_question_pool', e),
       );
 
-      // Trim to HISTORY_LIMIT — delete oldest beyond cap
-      const count = await this.messageRepo.count({ where: { shopId, userId } });
+      // Trim to HISTORY_LIMIT per session
+      const count = await this.messageRepo.count({ where: { chatSessionId } });
       if (count > HISTORY_LIMIT) {
         const oldest = await this.messageRepo.find({
-          where: { shopId, userId },
+          where: { chatSessionId },
           order: { createdAt: 'ASC' },
           take: count - HISTORY_LIMIT,
           select: ['id'],
@@ -291,7 +351,6 @@ export class LokteService {
         await this.messageRepo.delete(oldest.map((m) => m.id));
       }
     } catch (err) {
-      // Non-fatal — reply already returned to the user
       this.logger.error('Failed to persist chat messages', err);
     }
   }

@@ -1,4 +1,4 @@
-import { BadGatewayException, ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { LokteService } from './lokte.service';
 import { ConfigRegistryService } from '../config-registry/config-registry.service';
 
@@ -25,6 +25,7 @@ const mockMessageRepo = {
 } as unknown as import('typeorm').Repository<import('./entities/chat-message.entity').ChatMessage>;
 
 const mockSessionFindOne = jest.fn();
+const mockSessionFind = jest.fn();
 const mockSessionSave = jest.fn();
 const mockSessionCreate = jest.fn((data: object) => data);
 const mockSessionUpdate = jest.fn();
@@ -32,6 +33,7 @@ const mockSessionDelete = jest.fn();
 
 const mockSessionRepo = {
   findOne: mockSessionFindOne,
+  find: mockSessionFind,
   save: mockSessionSave,
   create: mockSessionCreate,
   update: mockSessionUpdate,
@@ -60,12 +62,13 @@ function setupHappyConfig() {
 }
 
 function setupHappyRepos() {
-  // No pre-existing session → exercises createLokteSession (first fetch) + sendMessage (second fetch),
-  // which matches how all the existing test fetch mocks are structured (2 sequential mocks).
+  // No pre-existing session → exercises createSession (DB save, no Lokte call yet)
+  // then ensureLokteSession triggers createLokteSession (first fetch).
+  // lokteSessionId: null so ensureLokteSession performs the lazy Lokte session init.
   mockSessionFindOne.mockResolvedValue(null);
   mockSessionCreate.mockImplementation((data: object) => data);
   mockSessionSave.mockImplementation((entity: object) =>
-    Promise.resolve({ id: 'sess-db-1', lokteSessionId: 'lokte-sess-1', lastAssistantMsgId: null, ...entity }),
+    Promise.resolve({ id: 'sess-db-1', lokteSessionId: null, lastAssistantMsgId: null, title: '', ...entity }),
   );
   mockSessionUpdate.mockResolvedValue(undefined);
   mockMessageSave.mockResolvedValue(undefined);
@@ -118,7 +121,7 @@ describe('LokteService', () => {
   describe('askQuestion — Lokte API calls', () => {
     beforeEach(() => { setupHappyConfig(); setupHappyRepos(); });
 
-    it('returns answer and empty documents on success', async () => {
+    it('returns answer, empty documents, and chatId on success', async () => {
       const ndjson = [
         JSON.stringify({ obj: { type: 'message_delta', content: 'The answer is 42' } }),
       ].join('\n');
@@ -138,6 +141,7 @@ describe('LokteService', () => {
       const result = await sut.askQuestion('shop.myshopify.com', 'user-id', 'What is the answer?');
       expect(result.answer).toBe('The answer is 42');
       expect(result.documents).toEqual([]);
+      expect(result.chatId).toBe('sess-db-1');
     });
 
     it('joins message_delta pieces into answer', async () => {
@@ -292,6 +296,40 @@ describe('LokteService', () => {
         BadGatewayException,
       );
     });
+
+    it('reuses existing chatId and skips create-chat-session when lokteSessionId already set', async () => {
+      const existingSession = {
+        id: 'sess-db-existing',
+        shopId: 'shop.myshopify.com',
+        userId: 'user-id',
+        lokteSessionId: 'lokte-existing',
+        lastAssistantMsgId: 42,
+        title: 'Existing chat',
+      };
+      mockSessionFindOne.mockResolvedValue(existingSession);
+
+      const ndjson = JSON.stringify({ obj: { type: 'message_delta', content: 'Reused answer' } });
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(ndjson),
+      } as unknown as Response);
+
+      const sut = makeSut();
+      const result = await sut.askQuestion('shop.myshopify.com', 'user-id', 'follow-up?', 'sess-db-existing');
+      expect(result.answer).toBe('Reused answer');
+      expect(result.chatId).toBe('sess-db-existing');
+      // Only 1 fetch (send-message), no create-chat-session
+      expect(global.fetch as jest.Mock).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws NotFoundException when chatId is provided but does not belong to user', async () => {
+      mockSessionFindOne.mockResolvedValue(null); // session not found for this user
+
+      const sut = makeSut();
+      await expect(
+        sut.askQuestion('shop.myshopify.com', 'user-id', 'hello', 'unknown-chat-id'),
+      ).rejects.toThrow(NotFoundException);
+    });
   });
 
   describe('persistMessages — message ordering', () => {
@@ -324,4 +362,46 @@ describe('LokteService', () => {
       expect(saveOrder).toEqual(['user', 'assistant']);
     });
   });
+
+  describe('listChats', () => {
+    it('returns sessions ordered newest first', async () => {
+      const sessions = [
+        { id: 'c1', title: 'Chat A', createdAt: new Date('2025-01-02'), updatedAt: new Date('2025-01-03') },
+        { id: 'c2', title: 'Chat B', createdAt: new Date('2025-01-01'), updatedAt: new Date('2025-01-01') },
+      ];
+      mockSessionFind.mockResolvedValue(sessions);
+
+      const sut = makeSut();
+      const result = await sut.listChats('shop.myshopify.com', 'user-id');
+      expect(result).toHaveLength(2);
+      expect(result[0].id).toBe('c1');
+    });
+  });
+
+  describe('deleteChat', () => {
+    it('throws NotFoundException when chatId does not belong to user', async () => {
+      mockSessionFindOne.mockResolvedValue(null);
+      const sut = makeSut();
+      await expect(sut.deleteChat('shop.myshopify.com', 'user-id', 'nonexistent')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('deletes the session (FK cascade removes messages)', async () => {
+      mockSessionFindOne.mockResolvedValue({
+        id: 'sess-1',
+        lokteSessionId: 'lokte-1',
+        shopId: 'shop.myshopify.com',
+        userId: 'user-id',
+      });
+      mockConfigGetDecrypted.mockResolvedValue('token');
+      global.fetch = jest.fn().mockResolvedValueOnce({ ok: true } as unknown as Response);
+      mockSessionDelete.mockResolvedValue(undefined);
+
+      const sut = makeSut();
+      await sut.deleteChat('shop.myshopify.com', 'user-id', 'sess-1');
+      expect(mockSessionDelete).toHaveBeenCalledWith('sess-1');
+    });
+  });
 });
+
