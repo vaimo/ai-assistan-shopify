@@ -8,6 +8,12 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { AssistantHeader } from "~/components/AssistantHeader";
+import { ChatHistoryDialog } from "~/components/ChatHistoryDialog";
+import { ChatInputBox } from "~/components/ChatInputBox";
+import { ChatLoadingSpinner } from "~/components/ChatLoadingSpinner";
+import { EmptyChatState } from "~/components/EmptyChatState";
+import { NotConfiguredNotice } from "~/components/NotConfiguredNotice";
 import { assistantTheme as theme } from "~/styles/assistant-theme";
 
 // ── DEV / TEST FLAGS ────────────────────────────────────────────────────────
@@ -645,10 +651,10 @@ export default function AssistantPage() {
   // ── Multi-chat state ────────────────────────────────────────────────────────
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const activeChatIdRef = useRef<string | null>(null);
   // Guard: chatsFetcher effect must only auto-activate + load history on the initial mount load.
-  // Subsequent refreshes (e.g. after a new chat is created) should only update the sidebar list.
+  // Subsequent refreshes (e.g. after a new chat is created) should only update the dialog list.
   const initialChatLoadDone = useRef(false);
   // Detect real fetch completions: only process history when fetcher transitions non-idle → idle.
   const prevHistoryFetcherState = useRef<string>("idle");
@@ -695,7 +701,7 @@ export default function AssistantPage() {
   // Sync ref so effects can read isRestoredThinking without stale closures
   useEffect(() => { isRestoredThinkingRef.current = isRestoredThinking; }, [isRestoredThinking]);
 
-  // When chats list loads: update sidebar list; auto-activate on initial mount only.
+  // When chats list loads: update dialog list; auto-activate on initial mount only.
   useEffect(() => {
     if (chatsFetcher.data?.chats === undefined) return;
     const loadedChats = chatsFetcher.data.chats;
@@ -945,7 +951,7 @@ export default function AssistantPage() {
 
   /** Delete a single chat — direct delete, no double-click confirmation needed */
   const handleDeleteChat = useCallback(async (chatId: string) => {
-    // Optimistically remove from sidebar
+    // Optimistically remove from the history dialog
     setChats((prev) => prev.filter((c) => c.id !== chatId));
 
     // If this was the active chat, switch to the next available one
@@ -1005,7 +1011,7 @@ export default function AssistantPage() {
 
   /** Start a fresh (empty) chat — first message will create the session */
   const handleNewChat = useCallback(() => {
-    setSidebarOpen(false);
+    setHistoryDialogOpen(false);
     setActiveChatId(null);
     activeChatIdRef.current = null;
     setMessages([]);
@@ -1019,8 +1025,8 @@ export default function AssistantPage() {
 
   /** Switch to an existing chat */
   const handleSwitchChat = useCallback(async (chatId: string) => {
-    if (chatId === activeChatIdRef.current) { setSidebarOpen(false); return; }
-    setSidebarOpen(false);
+    if (chatId === activeChatIdRef.current) { setHistoryDialogOpen(false); return; }
+    setHistoryDialogOpen(false);
     setActiveChatId(chatId);
     activeChatIdRef.current = chatId;
     setMessages([]);
@@ -1047,110 +1053,25 @@ export default function AssistantPage() {
   function renderInputBox() {
     const inputDisabled = !configured || isLoading;
     return (
-      <div
-        style={{
-          background: theme.colors.surface,
-          border: textareaFocused
-            ? `1px solid ${theme.colors.brand}`
-            : `1px solid ${theme.colors.border}`,
-          borderRadius: theme.radius.input,
-          boxShadow: textareaFocused
-            ? theme.shadows.inputFocus
-            : theme.shadows.input,
-          overflow: "hidden",
-          transition: `border-color ${theme.transitions.fast}, box-shadow ${theme.transitions.fast}`,
-          opacity: inputDisabled && !isLoading ? 0.5 : 1,
-        }}
-      >
-        <textarea
-          ref={textareaRef}
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onFocus={() => setTextareaFocused(true)}
-          onBlur={() => setTextareaFocused(false)}
-          placeholder={
-            configured
-              ? "How can AI Assistant help you today?"
-              : !aiAssistantEnabled
-                ? "AI Assistant is disabled. Enable it in Configuration…"
-                : "Configure Lokte integration to start chatting…"
-          }
-          rows={1}
-          disabled={inputDisabled}
-          style={{
-            display: "block",
-            width: "100%",
-            padding: theme.spacing.inputPadding,
-            border: "none",
-            outline: "none",
-            resize: "none",
-            fontSize: theme.typography.base,
-            lineHeight: "1.5",
-            color: theme.colors.textPrimary,
-            background: "transparent",
-            fontFamily: "inherit",
-            overflowY: "auto",
-            boxSizing: "border-box",
-          }}
-        />
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            padding: theme.spacing.inputFooterPadding,
-            gap: theme.spacing.sm,
-          }}
-        >
-          <span
-            style={{
-              fontSize: theme.typography.small,
-              color: theme.colors.textMuted,
-              marginRight: "auto",
-              userSelect: "none",
-            }}
-          >
-            ↵ Enter to send&nbsp;&nbsp;·&nbsp;&nbsp;Shift+Enter for new line
-          </span>
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={!inputValue.trim() || inputDisabled}
-            aria-label="Send message"
-            style={{
-              width: theme.sizes.sendButton,
-              height: theme.sizes.sendButton,
-              borderRadius: theme.radius.round,
-              border: "none",
-              background:
-                !inputValue.trim() || inputDisabled
-                  ? theme.colors.disabled
-                  : theme.colors.brand,
-              cursor:
-                !inputValue.trim() || inputDisabled ? "not-allowed" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: `background ${theme.transitions.fast}`,
-              flexShrink: 0,
-            }}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width={theme.sizes.sendIcon}
-              height={theme.sizes.sendIcon}
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke={theme.colors.white}
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 19V5M5 12l7-7 7 7" />
-            </svg>
-          </button>
-        </div>
-      </div>
+      <ChatInputBox
+        textareaRef={textareaRef}
+        value={inputValue}
+        placeholder={
+          configured
+            ? "How can AI Assistant help you today?"
+            : !aiAssistantEnabled
+              ? "AI Assistant is disabled. Enable it in Configuration…"
+              : "Configure Lokte integration to start chatting…"
+        }
+        disabled={inputDisabled}
+        isLoading={isLoading}
+        focused={textareaFocused}
+        onChange={setInputValue}
+        onKeyDown={handleKeyDown}
+        onFocus={() => setTextareaFocused(true)}
+        onBlur={() => setTextareaFocused(false)}
+        onSend={handleSend}
+      />
     );
   }
 
@@ -1167,409 +1088,32 @@ export default function AssistantPage() {
         overflow: "hidden",
       }}
     >
-      {/* ── Collapsible chat history sidebar ── */}
-      {sidebarOpen && (
-        <>
-          {/* Backdrop */}
-          <div
-            onClick={() => setSidebarOpen(false)}
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: "rgba(0,0,0,0.25)",
-              zIndex: 100,
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              bottom: 0,
-              width: "280px",
-              background: theme.colors.surface,
-              borderRight: `1px solid ${theme.colors.borderSubtle}`,
-              display: "flex",
-              flexDirection: "column",
-              zIndex: 101,
-              boxShadow: "2px 0 12px rgba(0,0,0,0.12)",
-            }}
-          >
-            {/* Sidebar header */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                borderBottom: `1px solid ${theme.colors.borderSubtle}`,
-                flexShrink: 0,
-              }}
-            >
-              <span style={{ fontWeight: 600, fontSize: theme.typography.body, color: theme.colors.textPrimary }}>
-                Chat History
-              </span>
-              <button
-                type="button"
-                onClick={handleNewChat}
-                title="Start a new chat"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  padding: `4px ${theme.spacing.sm}`,
-                  border: `1px solid ${theme.colors.border}`,
-                  borderRadius: theme.radius.button,
-                  background: "transparent",
-                  color: theme.colors.brand,
-                  fontSize: theme.typography.small,
-                  fontWeight: 500,
-                  cursor: "pointer",
-                }}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                </svg>
-                New chat
-              </button>
-            </div>
+      <ChatHistoryDialog
+        open={historyDialogOpen}
+        chats={chats}
+        activeChatId={activeChatId}
+        confirmClearAll={confirmClearAll}
+        onClose={() => setHistoryDialogOpen(false)}
+        onNewChat={handleNewChat}
+        onSwitchChat={(chatId) => void handleSwitchChat(chatId)}
+        onDeleteChat={(chatId) => void handleDeleteChat(chatId)}
+        onClearAll={() => void handleClearAll()}
+        onClearAllBlur={() => setConfirmClearAll(false)}
+      />
 
-            {/* Chat list */}
-            <div style={{ flex: 1, overflowY: "auto" }}>
-              {chats.length === 0 ? (
-                <div style={{ padding: theme.spacing.lg, color: theme.colors.textMuted, fontSize: theme.typography.small, textAlign: "center" }}>
-                  No previous chats
-                </div>
-              ) : (
-                chats.map((chat) => (
-                  <div
-                    key={chat.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: theme.spacing.xs,
-                      padding: `10px ${theme.spacing.md}`,
-                      cursor: "pointer",
-                      background: activeChatId === chat.id ? theme.colors.suggestionHover : "transparent",
-                      borderLeft: activeChatId === chat.id ? `3px solid ${theme.colors.brand}` : "3px solid transparent",
-                      transition: `background ${theme.transitions.fast}`,
-                    }}
-                    onMouseEnter={(e) => {
-                      if (activeChatId !== chat.id)
-                        (e.currentTarget as HTMLDivElement).style.background = theme.colors.pageBackground;
-                    }}
-                    onMouseLeave={(e) => {
-                      if (activeChatId !== chat.id)
-                        (e.currentTarget as HTMLDivElement).style.background = "transparent";
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => void handleSwitchChat(chat.id)}
-                      style={{
-                        flex: 1,
-                        textAlign: "left",
-                        background: "none",
-                        border: "none",
-                        padding: 0,
-                        cursor: "pointer",
-                        minWidth: 0,
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontSize: theme.typography.small,
-                          color: activeChatId === chat.id ? theme.colors.textPrimary : theme.colors.textSecondary,
-                          fontWeight: activeChatId === chat.id ? 500 : 400,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {chat.title || "New conversation"}
-                      </div>
-                    </button>
-                    {/* Per-chat delete button */}
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); void handleDeleteChat(chat.id); }}
-                      title="Delete this chat"
-                      aria-label="Delete chat"
-                      style={{
-                        flexShrink: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: "24px",
-                        height: "24px",
-                        borderRadius: theme.radius.button,
-                        border: "none",
-                        background: "transparent",
-                        color: theme.colors.textMuted,
-                        cursor: "pointer",
-                        opacity: 0.6,
-                        transition: `opacity ${theme.transitions.fast}`,
-                      }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "1"; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "0.6"; }}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
-                      </svg>
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Sidebar footer — Clear all */}
-            {chats.length > 0 && (
-              <div
-                style={{
-                  flexShrink: 0,
-                  borderTop: `1px solid ${theme.colors.borderSubtle}`,
-                  padding: theme.spacing.sm,
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => void handleClearAll()}
-                  onBlur={() => setConfirmClearAll(false)}
-                  style={{
-                    width: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: theme.spacing.xs,
-                    padding: `7px ${theme.spacing.sm}`,
-                    border: `1px solid ${confirmClearAll ? theme.colors.errorBorder : theme.colors.border}`,
-                    borderRadius: theme.radius.button,
-                    background: confirmClearAll ? theme.colors.errorBg : "transparent",
-                    color: confirmClearAll ? theme.colors.errorText : theme.colors.textMuted,
-                    fontSize: theme.typography.small,
-                    cursor: "pointer",
-                    transition: `background ${theme.transitions.fast}, color ${theme.transitions.fast}, border-color ${theme.transitions.fast}`,
-                  }}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
-                  </svg>
-                  {confirmClearAll ? "Confirm? Clear all" : "Clear all history"}
-                </button>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* ── Not-configured notice ── */}
       {configChecked && !configured && (
-        <div
-          style={{
-            flexShrink: 0,
-            padding: `${theme.spacing.md} ${theme.spacing.lg}`,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: theme.spacing.md,
-              padding: `${theme.spacing.md} ${theme.spacing.lg}`,
-              background: theme.colors.surface,
-              border: `1px solid ${theme.colors.brand}44`,
-              borderLeft: `3px solid ${theme.colors.brand}`,
-              borderRadius: theme.radius.button,
-              boxShadow: theme.shadows.bubble,
-            }}
-          >
-            {/* Warning icon in brand amber */}
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke={theme.colors.brand}
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ flexShrink: 0 }}
-            >
-              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-              <line x1="12" y1="9" x2="12" y2="13" />
-              <line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
-
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <span
-                style={{
-                  fontSize: theme.typography.body,
-                  color: theme.colors.textPrimary,
-                  fontWeight: 500,
-                }}
-              >
-                {!aiAssistantEnabled
-                  ? "AI Assistant is disabled."
-                  : "Lokte integration is not set up."}
-              </span>
-              <span
-                style={{
-                  fontSize: theme.typography.body,
-                  color: theme.colors.textSecondary,
-                  marginLeft: theme.spacing.xs,
-                }}
-              >
-                {!aiAssistantEnabled
-                  ? "Enable it in"
-                  : "Enable it and add your API key and User ID in"}
-              </span>
-              <button
-                onClick={() => navigate("/app/configuration")}
-                style={{
-                  marginLeft: theme.spacing.xs,
-                  fontSize: theme.typography.body,
-                  color: theme.colors.brand,
-                  fontWeight: 500,
-                  textDecoration: "none",
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: 0,
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.textDecoration = "underline"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.textDecoration = "none"; }}
-              >
-                Configuration →
-              </button>
-            </div>
-          </div>
-        </div>
+        <NotConfiguredNotice
+          aiAssistantEnabled={aiAssistantEnabled}
+          onOpenConfiguration={() => navigate("/app/configuration")}
+        />
       )}
 
-      {/* ── Persistent top header ── */}
-      <div
-        style={{
-          flexShrink: 0,
-          display: "flex",
-          alignItems: "center",
-          gap: theme.spacing.sm,
-          padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
-          borderBottom: `1px solid ${theme.colors.borderSubtle}`,
-          background: theme.colors.surface,
-        }}
-      >
-        {/* History toggle button */}
-        <button
-          type="button"
-          onClick={() => setSidebarOpen((o) => !o)}
-          aria-label="Toggle chat history"
-          title="Chat history"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: theme.spacing.xs,
-            padding: `6px ${theme.spacing.sm}`,
-            border: `1px solid ${theme.colors.border}`,
-            borderRadius: theme.radius.button,
-            background: sidebarOpen ? theme.colors.suggestionHover : "transparent",
-            color: theme.colors.textSecondary,
-            fontSize: theme.typography.small,
-            cursor: "pointer",
-            transition: `background ${theme.transitions.fast}`,
-          }}
-          onMouseEnter={(e) => {
-            if (!sidebarOpen) (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover;
-          }}
-          onMouseLeave={(e) => {
-            if (!sidebarOpen) (e.currentTarget as HTMLButtonElement).style.background = "transparent";
-          }}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="3" y1="6" x2="21" y2="6"/>
-            <line x1="3" y1="12" x2="21" y2="12"/>
-            <line x1="3" y1="18" x2="15" y2="18"/>
-          </svg>
-          History
-          {chats.length > 0 && (
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                minWidth: "18px",
-                height: "18px",
-                padding: "0 4px",
-                borderRadius: "9px",
-                background: theme.colors.brand,
-                color: theme.colors.white,
-                fontSize: "11px",
-                fontWeight: 600,
-                lineHeight: 1,
-              }}
-            >
-              {chats.length}
-            </span>
-          )}
-        </button>
-
-        {/* New chat button */}
-        <button
-          type="button"
-          onClick={handleNewChat}
-          title="Start a new chat"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: theme.spacing.xs,
-            padding: `6px ${theme.spacing.sm}`,
-            border: `1px solid ${theme.colors.border}`,
-            borderRadius: theme.radius.button,
-            background: "transparent",
-            color: theme.colors.textSecondary,
-            fontSize: theme.typography.small,
-            cursor: "pointer",
-            transition: `background ${theme.transitions.fast}`,
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-          New chat
-        </button>
-
-        {/* AI Assistant label — right aligned */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: theme.spacing.sm,
-            marginLeft: "auto",
-          }}
-        >
-          <img
-            src="/assets/logo.png"
-            alt="AI Assistant"
-            style={{
-              width: theme.sizes.avatar,
-              height: theme.sizes.avatar,
-              borderRadius: theme.radius.button,
-              objectFit: "contain",
-            }}
-          />
-          <span
-            style={{
-              fontSize: theme.typography.small,
-              fontWeight: 500,
-              color: theme.colors.textPrimary,
-            }}
-          >
-            AI Assistant
-          </span>
-        </div>
-      </div>
+      <AssistantHeader
+        historyDialogOpen={historyDialogOpen}
+        chatsCount={chats.length}
+        onToggleHistory={() => setHistoryDialogOpen((o) => !o)}
+        onNewChat={handleNewChat}
+      />
 
       {/* ── Scrollable messages (or centered empty state) ── */}
       <div
@@ -1582,139 +1126,14 @@ export default function AssistantPage() {
         }}
       >
         {!historyReady ? (
-          /* ── Spinner while history is loading ── */
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-            <div
-              style={{
-                width: "32px",
-                height: "32px",
-                borderRadius: "50%",
-                border: `2px solid ${theme.colors.brand}`,
-                borderTopColor: theme.colors.textSecondary,
-                animation: "spin 0.8s linear infinite",
-              }}
-            />
-          </div>
+          <ChatLoadingSpinner />
         ) : !hasMessages ? (
-          /* ── Empty state: 3-row grid matching expected layout ── */
-          <div
-            style={{
-              flex: 1,
-              display: "grid",
-              gridTemplateRows: "0.85fr auto 1.15fr",
-              width: "100%",
-              maxWidth: theme.sizes.maxContentWidth,
-              margin: "0 auto",
-              padding: `0 ${theme.spacing.lg}`,
-              height: "100%",
-            }}
-          >
-            {/* Row 1 — greeting aligned to bottom of its row */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "flex-end",
-                justifyContent: "center",
-                paddingBottom: theme.spacing.xxl,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: theme.spacing.lg,
-                }}
-              >
-                <img
-                  src="/assets/logo.png"
-                  alt="AI Assistant logo"
-                  style={{
-                    width: theme.sizes.logo,
-                    height: theme.sizes.logo,
-                    borderRadius: theme.radius.input,
-                    objectFit: "contain",
-                    flexShrink: 0,
-                  }}
-                />
-                <h1
-                  style={{
-                    fontSize: theme.typography.heading,
-                    fontWeight: 500,
-                    margin: 0,
-                    color: theme.colors.textPrimary,
-                    lineHeight: 1.3,
-                    maxWidth: theme.sizes.greetingMaxWidth,
-                  }}
-                >
-                  What would you like to{" "}
-                  <span style={{ color: theme.colors.brand }}>explore</span> today?
-                </h1>
-              </div>
-            </div>
-
-            {/* Row 2 — input */}
-            <div>{renderInputBox()}</div>
-
-            {/* Row 3 — suggested questions */}
-            <div style={{ marginTop: theme.spacing.xl }}>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: theme.spacing.xxs,
-                }}
-              >
-                {suggestedQuestions.map((question) => (
-                  <button
-                    key={question}
-                    type="button"
-                    disabled={!configured}
-                    onClick={() => void sendMessage(question)}
-                    style={{
-                      textAlign: "left",
-                      fontSize: theme.typography.body,
-                      margin: `0 ${theme.spacing.lg}`,
-                      padding: `10px ${theme.spacing.md}`,
-                      borderRadius: theme.radius.button,
-                      border: "none",
-                      background: "transparent",
-                      color: theme.colors.textSecondary,
-                      cursor: configured ? "pointer" : "not-allowed",
-                      opacity: configured ? 1 : 0.4,
-                      transition: `background ${theme.transitions.fast}`,
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!configured) return;
-                      (e.currentTarget as HTMLButtonElement).style.background =
-                        theme.colors.suggestionHover;
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.background =
-                        "transparent";
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontWeight: 500,
-                        color: theme.colors.textPrimary,
-                        lineHeight: 1.4,
-                      }}
-                    >
-                      {question}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          <EmptyChatState
+            inputBox={renderInputBox()}
+            suggestedQuestions={suggestedQuestions}
+            configured={configured}
+            onSelectQuestion={(question) => void sendMessage(question)}
+          />
         ) : (
           /* ── Active conversation ── */
           <div
