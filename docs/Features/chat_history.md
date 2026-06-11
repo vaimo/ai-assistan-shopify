@@ -124,7 +124,7 @@ POST   /lokte/:shopId/question              → { answer, docs, chatId }
 | `backend.server.ts` | `ChatSummary` interface; `clearAllChatHistory` |
 | `app._index.tsx` loader | Returns only `shopId` (unchanged) |
 | `app._index.tsx` action | `loadChats`, `loadHistory(chatId)`, `clearHistory(chatId)`, `clearAllHistory` intents |
-| `app._index.tsx` component | Collapsible sidebar, `activeChatId` + `chats[]` state, new-chat/switch/delete handlers |
+| `app._index.tsx` component | Chat history dialog, `activeChatId` + `chats[]` state, new-chat/switch/delete handlers |
 | `api.chat.tsx` | Forwards optional `chatId`; returns `chatId` in response |
 
 ---
@@ -146,15 +146,15 @@ Browser → shopify.idToken() → POST /app (Remix action) with { sessionToken }
 
 ---
 
-## UI — Collapsible sidebar
+## UI — Chat History dialog
 
 - Toggle button in the persistent top header ("History")
 - Badge shows total number of chats
 - "New chat" button also available in header
-- Sidebar overlays the chat area (absolute positioned, 280px wide)
+- Centered modal dialog overlays the chat area with a backdrop
 - Per-chat delete button (trash icon) on each list item
-- "Clear all history" button with confirm step in sidebar footer
-- Clicking outside the sidebar closes it
+- "Clear all history" button with confirm step in dialog footer
+- Clicking the backdrop or close button closes the dialog
 
 ---
 
@@ -176,7 +176,7 @@ Browser → shopify.idToken() → POST /app (Remix action) with { sessionToken }
 | File | Change |
 |---|---|
 | `frontend/app/backend.server.ts` | `ChatSummary` interface; `clearAllChatHistory` |
-| `frontend/app/routes/app._index.tsx` | New sidebar, updated state/intents/flow |
+| `frontend/app/routes/app._index.tsx` | Chat history dialog flow, updated state/intents/flow |
 | `frontend/app/routes/api.chat.tsx` | Forward `chatId`; return `chatId` in response |
 
 ---
