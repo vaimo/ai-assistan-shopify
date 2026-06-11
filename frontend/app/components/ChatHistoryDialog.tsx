@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { assistantTheme as theme } from "~/styles/assistant-theme";
 
 interface ChatHistoryItem {
@@ -30,6 +31,24 @@ export function ChatHistoryDialog({
   onClearAll,
   onClearAllBlur,
 }: ChatHistoryDialogProps) {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setVisible(false);
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+
+  useEffect(() => {
+    if (open && chats.length === 0) {
+      onClose();
+    }
+  }, [chats.length, onClose, open]);
+
   if (!open) return null;
 
   return (
@@ -41,6 +60,8 @@ export function ChatHistoryDialog({
           position: "absolute",
           inset: 0,
           background: "rgba(0,0,0,0.25)",
+          opacity: visible ? 1 : 0,
+          transition: `opacity ${theme.transitions.fast} ease`,
           zIndex: 100,
         }}
       />
@@ -53,7 +74,7 @@ export function ChatHistoryDialog({
           top: "50%",
           left: "50%",
           transform: "translate(-50%, -50%)",
-          width: "min(520px, calc(100vw - 32px))",
+          width: "min(670px, calc(100vw - 32px))",
           maxHeight: "min(640px, calc(100vh - 96px))",
           background: theme.colors.surface,
           border: `1px solid ${theme.colors.borderSubtle}`,
@@ -63,6 +84,8 @@ export function ChatHistoryDialog({
           zIndex: 101,
           boxShadow: theme.resourceLink.popupShadow,
           overflow: "hidden",
+          opacity: visible ? 1 : 0,
+          transition: `opacity ${theme.transitions.fast} ease`,
         }}
       >
         {/* Dialog header */}
@@ -80,7 +103,7 @@ export function ChatHistoryDialog({
           <span style={{ fontWeight: 600, fontSize: theme.typography.base, color: theme.colors.textPrimary }}>
             Chat History
           </span>
-          <div style={{ display: "flex", alignItems: "center", gap: theme.spacing.sm }}>
+          <div style={{ display: "flex", alignItems: "center", gap: theme.spacing.sm}}>
             <button
               type="button"
               onClick={onNewChat}
@@ -93,11 +116,12 @@ export function ChatHistoryDialog({
                 border: `1px solid ${theme.colors.border}`,
                 borderRadius: theme.radius.button,
                 background: "transparent",
-                color: theme.colors.brand,
+                color: theme.colors.textSecondary,
                 fontSize: theme.typography.small,
                 fontWeight: 500,
                 cursor: "pointer",
                 transition: `background ${theme.transitions.fast}`,
+                height: "32px",
               }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
@@ -116,8 +140,8 @@ export function ChatHistoryDialog({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                width: "30px",
-                height: "30px",
+                width: "32px",
+                height: "32px",
                 border: `1px solid ${theme.colors.border}`,
                 borderRadius: theme.radius.button,
                 background: "transparent",
@@ -261,6 +285,8 @@ export function ChatHistoryDialog({
                 cursor: "pointer",
                 transition: `background ${theme.transitions.fast}, color ${theme.transitions.fast}, border-color ${theme.transitions.fast}`,
               }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
