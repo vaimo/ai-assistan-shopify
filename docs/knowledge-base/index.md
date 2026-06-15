@@ -42,6 +42,7 @@ Task-oriented guides for specific goals.
 | [Clear Conversation History](how-to/03-clear-conversation-history.md) | Clear your chat history and start a fresh conversation |
 | [Troubleshoot Common Issues](how-to/04-troubleshoot-common-issues.md) | Fixes for the most common problems users and operators run into |
 | [Manage FAQ Suggestions](how-to/05-manage-faq-suggestions.md) | Configure generated suggested questions and force regeneration |
+| [Use the Chat History Selector](how-to/06-use-chat-history-selector.md) | Switch between saved chats, start new chats, and delete history |
 
 ---
 
