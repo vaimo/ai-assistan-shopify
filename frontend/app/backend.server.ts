@@ -112,7 +112,7 @@ export async function clearAllChatHistory(
   sessionToken: string,
 ): Promise<void> {
   const backendUrl = process.env.BACKEND_URL || 'http://localhost:3004';
-  const url = `${backendUrl}/lokte/${shopId}/history`;
+  const url = `${backendUrl}/lokte/${encodeURIComponent(shopId)}/history`;
   const response = await fetch(url, {
     method: 'DELETE',
     headers: {

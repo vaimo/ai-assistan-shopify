@@ -36,6 +36,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     shopId: string;
     chatId?: string;
   };
+  const encodedShop = encodeURIComponent(session.shop);
 
   // Prevent a tampered request body from targeting a different shop
   if (shopId && shopId !== session.shop) {
@@ -45,7 +46,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "loadChats") {
     const backendUrl = process.env.BACKEND_URL;
     const res = await fetch(
-      `${backendUrl}/lokte/${session.shop}/chats`,
+      `${backendUrl}/lokte/${encodedShop}/chats`,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
     const chats = res.ok ? await res.json() : [];
@@ -55,8 +56,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "loadHistory") {
     if (!chatId) return json({ messages: [] });
     const backendUrl = process.env.BACKEND_URL;
+    const encodedChatId = encodeURIComponent(chatId);
     const res = await fetch(
-      `${backendUrl}/lokte/${session.shop}/chats/${chatId}/history`,
+      `${backendUrl}/lokte/${encodedShop}/chats/${encodedChatId}/history`,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
     const messages = res.ok ? await res.json() : [];
@@ -66,8 +68,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "clearHistory") {
     if (!chatId) return json({ deleted: false });
     const backendUrl = process.env.BACKEND_URL;
+    const encodedChatId = encodeURIComponent(chatId);
     const res = await fetch(
-      `${backendUrl}/lokte/${session.shop}/chats/${chatId}`,
+      `${backendUrl}/lokte/${encodedShop}/chats/${encodedChatId}`,
       { method: "DELETE", headers: { Authorization: `Bearer ${sessionToken}` } },
     );
     return json({ deleted: res.ok });
@@ -83,9 +86,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const backendUrl = process.env.BACKEND_URL;
 
     const [lokteRes, aiAssistantRes, devRes] = await Promise.all([
-      fetch(`${backendUrl}/config/${session.shop}/lokte`, { headers: authHeader }),
-      fetch(`${backendUrl}/config/${session.shop}/ai_assistant`, { headers: authHeader }),
-      fetch(`${backendUrl}/config/${session.shop}/dev_testing`, { headers: authHeader }),
+      fetch(`${backendUrl}/config/${encodedShop}/lokte`, { headers: authHeader }),
+      fetch(`${backendUrl}/config/${encodedShop}/ai_assistant`, { headers: authHeader }),
+      fetch(`${backendUrl}/config/${encodedShop}/dev_testing`, { headers: authHeader }),
     ]);
 
     const lokte = lokteRes.ok ? await lokteRes.json() : {};
@@ -104,7 +107,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "loadFaq") {
     const backendUrl = process.env.BACKEND_URL;
     const res = await fetch(
-      `${backendUrl}/faq/${session.shop}`,
+      `${backendUrl}/faq/${encodedShop}`,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
     if (!res.ok) return json({ faqQuestions: null, faqLastGeneratedAt: null });
@@ -951,31 +954,24 @@ export default function AssistantPage() {
 
   /** Delete a single chat — direct delete, no double-click confirmation needed */
   const handleDeleteChat = useCallback(async (chatId: string) => {
+    const remainingChats = chats.filter((c) => c.id !== chatId);
+    const deletingActiveChat = activeChatIdRef.current === chatId;
+    const nextChat = deletingActiveChat ? (remainingChats[0] ?? null) : null;
+
     // Optimistically remove from the history dialog
-    setChats((prev) => prev.filter((c) => c.id !== chatId));
+    setChats(remainingChats);
 
     // If this was the active chat, switch to the next available one
-    if (activeChatIdRef.current === chatId) {
-      setChats((prev) => {
-        const remaining = prev.filter((c) => c.id !== chatId);
-        const next = remaining[0] ?? null;
-        setActiveChatId(next?.id ?? null);
-        activeChatIdRef.current = next?.id ?? null;
+    if (deletingActiveChat) {
+      setActiveChatId(nextChat?.id ?? null);
+      activeChatIdRef.current = nextChat?.id ?? null;
+
+      if (nextChat) {
         setHistoryReady(false);
-        if (next) {
-          (async () => {
-            const sessionToken = await shopify.idToken();
-            historyFetcher.submit(
-              { intent: "loadHistory", sessionToken, shopId, chatId: next.id },
-              { method: "POST", encType: "application/json" },
-            );
-          })();
-        } else {
-          setMessages([]);
-          setHistoryReady(true);
-        }
-        return remaining;
-      });
+      } else {
+        setMessages([]);
+        setHistoryReady(true);
+      }
     }
 
     setIsRestoredThinking(false);
@@ -984,11 +980,17 @@ export default function AssistantPage() {
     try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
 
     const sessionToken = await shopify.idToken();
+    if (nextChat) {
+      historyFetcher.submit(
+        { intent: "loadHistory", sessionToken, shopId, chatId: nextChat.id },
+        { method: "POST", encType: "application/json" },
+      );
+    }
     clearFetcher.submit(
       JSON.stringify({ intent: "clearHistory", sessionToken, shopId, chatId }),
       { method: "POST", encType: "application/json" },
     );
-  }, [shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chats, shopify, shopId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Clear ALL chat sessions */
   const handleClearAll = useCallback(async () => {
@@ -1011,6 +1013,7 @@ export default function AssistantPage() {
 
   /** Start a fresh (empty) chat — first message will create the session */
   const handleNewChat = useCallback(() => {
+    if (!hasMessages) return;
     setHistoryDialogOpen(false);
     setActiveChatId(null);
     activeChatIdRef.current = null;
@@ -1021,7 +1024,7 @@ export default function AssistantPage() {
     lastProcessedFetcherData.current = null;
     try { sessionStorage.removeItem("ai-chat-pending"); } catch { /* ignore */ }
     setHistoryReady(true);
-  }, []);
+  }, [hasMessages]);
 
   /** Switch to an existing chat */
   const handleSwitchChat = useCallback(async (chatId: string) => {
@@ -1093,6 +1096,7 @@ export default function AssistantPage() {
         chats={chats}
         activeChatId={activeChatId}
         confirmClearAll={confirmClearAll}
+        newChatDisabled={!hasMessages}
         onClose={() => setHistoryDialogOpen(false)}
         onNewChat={handleNewChat}
         onSwitchChat={(chatId) => void handleSwitchChat(chatId)}
@@ -1111,6 +1115,7 @@ export default function AssistantPage() {
       <AssistantHeader
         historyDialogOpen={historyDialogOpen}
         chatsCount={chats.length}
+        newChatDisabled={!hasMessages}
         onToggleHistory={() => setHistoryDialogOpen((o) => !o)}
         onNewChat={handleNewChat}
       />

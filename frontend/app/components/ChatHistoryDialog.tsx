@@ -11,6 +11,7 @@ interface ChatHistoryDialogProps {
   chats: ChatHistoryItem[];
   activeChatId: string | null;
   confirmClearAll: boolean;
+  newChatDisabled: boolean;
   onClose: () => void;
   onNewChat: () => void;
   onSwitchChat: (chatId: string) => void;
@@ -24,6 +25,7 @@ export function ChatHistoryDialog({
   chats,
   activeChatId,
   confirmClearAll,
+  newChatDisabled,
   onClose,
   onNewChat,
   onSwitchChat,
@@ -48,6 +50,19 @@ export function ChatHistoryDialog({
       onClose();
     }
   }, [chats.length, onClose, open]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, open]);
 
   if (!open) return null;
 
@@ -107,7 +122,8 @@ export function ChatHistoryDialog({
             <button
               type="button"
               onClick={onNewChat}
-              title="Start a new chat"
+              disabled={newChatDisabled}
+              title={newChatDisabled ? "Current chat is already empty" : "Start a new chat"}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -119,12 +135,19 @@ export function ChatHistoryDialog({
                 color: theme.colors.textSecondary,
                 fontSize: theme.typography.small,
                 fontWeight: 500,
-                cursor: "pointer",
-                transition: `background ${theme.transitions.fast}`,
+                cursor: newChatDisabled ? "not-allowed" : "pointer",
+                opacity: newChatDisabled ? 0.5 : 1,
+                transition: `background ${theme.transitions.fast}, opacity ${theme.transitions.fast}`,
                 height: "32px",
               }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+              onMouseEnter={(e) => {
+                if (newChatDisabled) return;
+                (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover;
+              }}
+              onMouseLeave={(e) => {
+                if (newChatDisabled) return;
+                (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+              }}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>

@@ -41,6 +41,7 @@ Task-oriented guides for specific goals.
 | [Configure Lokte Integration](how-to/02-configure-lokte-integration.md) | Obtain Lokte credentials and connect them to the app |
 | [Clear Conversation History](how-to/03-clear-conversation-history.md) | Clear your chat history and start a fresh conversation |
 | [Troubleshoot Common Issues](how-to/04-troubleshoot-common-issues.md) | Fixes for the most common problems users and operators run into |
+| [Manage FAQ Suggestions](how-to/05-manage-faq-suggestions.md) | Configure generated suggested questions and force regeneration |
 
 ---
 
