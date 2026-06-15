@@ -6,7 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { ConfigRegistryService } from '../config-registry/config-registry.service';
 import { ChatMessage } from './entities/chat-message.entity';
 import { ChatSession } from './entities/chat-session.entity';
@@ -179,8 +179,21 @@ export class LokteService {
     if (session.lokteSessionId) return session;
 
     const lokteSessionId = await this.createLokteSession(token, personaId);
-    await this.sessionRepo.update(session.id, { lokteSessionId });
-    return { ...session, lokteSessionId };
+    const updateResult = await this.sessionRepo.update(
+      { id: session.id, lokteSessionId: IsNull() },
+      { lokteSessionId },
+    );
+
+    if (updateResult.affected && updateResult.affected > 0) {
+      return { ...session, lokteSessionId };
+    }
+
+    await this.deleteLokteSession(token, lokteSessionId);
+
+    const currentSession = await this.sessionRepo.findOne({ where: { id: session.id } });
+    if (currentSession?.lokteSessionId) return currentSession;
+
+    throw new NotFoundException(`Chat session not found: ${session.id}`);
   }
 
   private async createLokteSession(token: string, personaId: string): Promise<string> {
@@ -307,7 +320,7 @@ export class LokteService {
 
   private async deleteLokteSession(token: string, lokteSessionId: string): Promise<void> {
     try {
-      await fetch(`${LOKTE_BASE_URL}/api/chat/delete-chat-session/${lokteSessionId}`, {
+      await fetch(`${LOKTE_BASE_URL}/api/chat/delete-chat-session/${encodeURIComponent(lokteSessionId)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });

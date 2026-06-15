@@ -3,6 +3,7 @@ import { assistantTheme as theme } from "~/styles/assistant-theme";
 interface AssistantHeaderProps {
   historyDialogOpen: boolean;
   chatsCount: number;
+  newChatDisabled: boolean;
   onToggleHistory: () => void;
   onNewChat: () => void;
 }
@@ -10,6 +11,7 @@ interface AssistantHeaderProps {
 export function AssistantHeader({
   historyDialogOpen,
   chatsCount,
+  newChatDisabled,
   onToggleHistory,
   onNewChat,
 }: AssistantHeaderProps) {
@@ -32,6 +34,7 @@ export function AssistantHeader({
         onClick={onToggleHistory}
         disabled={historyDisabled}
         aria-label="Toggle chat history"
+        aria-expanded={historyDialogOpen}
         title={historyDisabled ? "No chat history" : "Chat history"}
         style={{
           display: "flex",
@@ -87,7 +90,8 @@ export function AssistantHeader({
       <button
         type="button"
         onClick={onNewChat}
-        title="Start a new chat"
+        disabled={newChatDisabled}
+        title={newChatDisabled ? "Current chat is already empty" : "Start a new chat"}
         style={{
           display: "flex",
           alignItems: "center",
@@ -98,12 +102,19 @@ export function AssistantHeader({
           background: "transparent",
           color: theme.colors.textSecondary,
           fontSize: theme.typography.small,
-          cursor: "pointer",
-          transition: `background ${theme.transitions.fast}`,
+          cursor: newChatDisabled ? "not-allowed" : "pointer",
+          opacity: newChatDisabled ? 0.5 : 1,
+          transition: `background ${theme.transitions.fast}, opacity ${theme.transitions.fast}`,
           height: "32px",
         }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+        onMouseEnter={(e) => {
+          if (newChatDisabled) return;
+          (e.currentTarget as HTMLButtonElement).style.background = theme.colors.suggestionHover;
+        }}
+        onMouseLeave={(e) => {
+          if (newChatDisabled) return;
+          (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+        }}
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>

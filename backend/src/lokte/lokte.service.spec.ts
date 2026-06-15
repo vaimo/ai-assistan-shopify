@@ -70,7 +70,7 @@ function setupHappyRepos() {
   mockSessionSave.mockImplementation((entity: object) =>
     Promise.resolve({ id: 'sess-db-1', lokteSessionId: null, lastAssistantMsgId: null, title: '', ...entity }),
   );
-  mockSessionUpdate.mockResolvedValue(undefined);
+  mockSessionUpdate.mockResolvedValue({ affected: 1 });
   mockMessageSave.mockResolvedValue(undefined);
   mockMessageCount.mockResolvedValue(1);
   // FAQ pool logging is non-fatal; resolve by default
@@ -322,6 +322,48 @@ describe('LokteService', () => {
       expect(global.fetch as jest.Mock).toHaveBeenCalledTimes(1);
     });
 
+    it('deletes a newly-created Lokte session when another request wins lazy initialization', async () => {
+      mockSessionUpdate.mockResolvedValueOnce({ affected: 0 });
+      mockSessionFindOne.mockResolvedValueOnce({
+        id: 'sess-db-1',
+        shopId: 'shop.myshopify.com',
+        userId: 'user-id',
+        lokteSessionId: 'lokte-winner',
+        lastAssistantMsgId: null,
+        title: '',
+      });
+
+      const ndjson = JSON.stringify({ obj: { type: 'message_delta', content: 'Winner answer' } });
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'lokte-loser' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({ ok: true } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(ndjson),
+        } as unknown as Response);
+
+      const sut = makeSut();
+      const result = await sut.askQuestion('shop.myshopify.com', 'user-id', 'race?');
+
+      expect(result.answer).toBe('Winner answer');
+      expect(global.fetch as jest.Mock).toHaveBeenNthCalledWith(
+        2,
+        'https://lokte.vaimo.network/api/chat/delete-chat-session/lokte-loser',
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+      expect(global.fetch as jest.Mock).toHaveBeenNthCalledWith(
+        3,
+        'https://lokte.vaimo.network/api/chat/send-message',
+        expect.objectContaining({
+          body: expect.stringContaining('"chat_session_id":"lokte-winner"'),
+        }),
+      );
+    });
+
     it('throws NotFoundException when chatId is provided but does not belong to user', async () => {
       mockSessionFindOne.mockResolvedValue(null); // session not found for this user
 
@@ -404,4 +446,3 @@ describe('LokteService', () => {
     });
   });
 });
-
