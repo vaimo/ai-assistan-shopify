@@ -30,20 +30,24 @@ const MAX_QUESTION_LENGTH = 200;
 const FAQ_GENERATION_PROMPT = (questions: string[]) =>
   `You are a strict FAQ curator for a business assistant powered by Lokte — an internal AI/RAG platform that answers questions about a company's own knowledge base, internal processes, products, orders, and operational data.
 
-Your task: from the list of questions below, select and rewrite exactly 3 questions that employees or merchants would realistically ask about their OWN company's operations, products, data, or internal knowledge base.
+Your task: from the list of questions below, select and rewrite questions that employees or merchants would realistically ask about their OWN Shopify store, company's operations, products, orders, inventory, internal procedures, internal tools, or operational data.
 
 Rules — you MUST follow all of them:
-1. STRICT TOPIC FILTER: Keep ONLY questions about business operations, products, orders, inventory, company procedures, internal tools, or data that Lokte would be expected to answer. DISCARD anything unrelated to work — cooking, personal topics, general trivia, entertainment, external news, or any topic that has no connection to company/business operations.
-2. REWRITE each kept question to be clear and concise (max 12 words). Use professional business language.
-3. Return ONLY a valid JSON array of exactly 3 strings. No explanation, no markdown, no extra text.
-4. If fewer than 3 on-topic questions remain after filtering, fill missing slots ONLY with plausible questions a business user would ask about their company's products, orders, or internal processes (e.g. inventory levels, sales performance, order status, company policies).
-5. NEVER invent off-topic questions to fill slots.
+1. Treat each input question independently. A question is ELIGIBLE only if it directly asks about the user's own store/company data, products, orders, inventory, customers, sales, internal processes, policies, documents, or tools.
+2. DISCARD anything unrelated or only loosely related: cooking, recipes, health, travel, entertainment, sports, politics, weather, jokes, personal advice, general trivia, external news, public facts, coding help, math homework, or broad questions that do not mention the user's store/company/work.
+3. Do NOT turn unrelated questions into business questions. Do NOT infer business intent from generic words.
+4. If fewer than 3 eligible source questions remain, return [].
+5. If 3 or more eligible source questions remain, return ONLY a valid JSON array of exactly 3 rewritten strings. No explanation, no markdown, no extra text.
+6. Rewrite each kept question to be clear, concise, professional, and max 12 words.
 
 Example valid output: ["What are our top-selling products this month?","Which orders need urgent attention?","How do I update product inventory levels?"]
-Example invalid output (contains off-topic): ["How do I bake sourdough bread?","What movies are trending?","Top products this month?"]
+Example valid output when inputs are mostly unrelated: []
+Example invalid output because unrelated inputs were converted into business questions: ["Which bakery products sell best?","What movie merchandise is trending?","Which sports items should we stock?"]
 
 Questions to analyze:
 ${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`;
+
+type FaqPromptResult = [string, string, string] | [] | null;
 
 @Injectable()
 export class FaqSuggestionsService {
@@ -111,6 +115,23 @@ export class FaqSuggestionsService {
     return row?.questions ?? null;
   }
 
+  async isFaqEnabled(shopId: string): Promise<boolean> {
+    const enabled = await this.configRegistry.get(shopId, 'faq_suggestions.general.enable');
+    return Number(enabled) === 1;
+  }
+
+  async getFallbackFaqs(shopId: string): Promise<string[]> {
+    const questions = await Promise.all([
+      this.configRegistry.get(shopId, 'faq_suggestions.general.fallback_q1'),
+      this.configRegistry.get(shopId, 'faq_suggestions.general.fallback_q2'),
+      this.configRegistry.get(shopId, 'faq_suggestions.general.fallback_q3'),
+    ]);
+
+    return questions
+      .map((question) => String(question ?? '').trim())
+      .filter((question) => question.length > 0);
+  }
+
   /**
    * Returns the timestamp of the last successful FAQ generation, or null.
    */
@@ -168,6 +189,18 @@ export class FaqSuggestionsService {
     try {
       tempSessionId = await this.createTempLokteSession(token, personaId);
       const generated = await this.runFaqPrompt(token, tempSessionId, sanitizedQuestions);
+      if (generated === null) {
+        this.logger.warn(`FAQ generation skipped for ${shopId}: invalid Lokte FAQ response`);
+        return null;
+      }
+
+      if (generated.length === 0) {
+        this.logger.log(`FAQ generation skipped for ${shopId}: fewer than 3 eligible business questions`);
+        if (poolRowIds.length > 0) {
+          await this.poolRepo.delete(poolRowIds);
+        }
+        return null;
+      }
 
       await this.suggestedFaqRepo.upsert(
         { shopId, questions: generated },
@@ -227,13 +260,13 @@ export class FaqSuggestionsService {
 
   /**
    * Sends the FAQ guardrail prompt to Lokte and parses the JSON array response.
-   * Returns exactly 3 questions; falls back to the original hardcoded questions on parse failure.
+   * Returns 3 questions, [] when the pool is not eligible, or null on invalid output.
    */
   private async runFaqPrompt(
     token: string,
     sessionId: string,
     questions: string[],
-  ): Promise<[string, string, string]> {
+  ): Promise<FaqPromptResult> {
     const prompt = FAQ_GENERATION_PROMPT(questions);
 
     let response: Response;
@@ -291,19 +324,17 @@ export class FaqSuggestionsService {
 
   /**
    * Parses the JSON array from Lokte's response.
-   * Returns a tuple of exactly 3 strings; falls back to defaults on any parse error.
+   * Returns 3 strings, [] for an explicit guardrail skip, or null on parse error.
    */
-  private parseGeneratedQuestions(raw: string): [string, string, string] {
-    const FALLBACK: [string, string, string] = [
-      'What are my top-selling products this month?',
-      'Show me recent orders that need attention.',
-      'How can I improve my store\'s conversion rate?',
-    ];
-
+  private parseGeneratedQuestions(raw: string): FaqPromptResult {
     try {
       // Strip potential markdown code fences
       const cleaned = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const parsed: unknown = JSON.parse(cleaned);
+
+      if (Array.isArray(parsed) && parsed.length === 0) {
+        return [];
+      }
 
       if (
         Array.isArray(parsed) &&
@@ -313,10 +344,10 @@ export class FaqSuggestionsService {
         return [parsed[0] as string, parsed[1] as string, parsed[2] as string];
       }
     } catch {
-      // fall through to fallback
+      // fall through to null
     }
 
-    this.logger.warn(`Could not parse FAQ response from Lokte, using fallback. Raw: "${raw.slice(0, 200)}"`);
-    return FALLBACK;
+    this.logger.warn(`Could not parse FAQ response from Lokte. Raw: "${raw.slice(0, 200)}"`);
+    return null;
   }
 }

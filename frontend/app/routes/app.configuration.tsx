@@ -40,6 +40,11 @@ interface ConfigNamespaceMeta {
 
 type Schema = Record<string, ConfigNamespaceMeta>;
 type ConfigValues = Record<string, Record<string, unknown>>;
+type FaqStatus = {
+  questions: string[] | null;
+  lastGeneratedAt: string | null;
+  enabled?: boolean;
+};
 
 // ── Server ───────────────────────────────────────────────────────────────────
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -514,11 +519,11 @@ export default function Configuration() {
 
   const loadFetcher = useFetcher<{ schema: Schema; values: ConfigValues }>();
   const saveFetcher = useFetcher<{ saved: boolean }>();
-  const faqFetcher = useFetcher<{ questions: string[] | null; lastGeneratedAt: string | null; forceRunOk?: boolean }>();
+  const faqFetcher = useFetcher<FaqStatus & { forceRunOk?: boolean }>();
 
   const [localValues, setLocalValues] = useState<ConfigValues>({});
   const [savedBanner, setSavedBanner] = useState(false);
-  const [faqStatus, setFaqStatus] = useState<{ lastGeneratedAt: string | null; questions: string[] | null }>({ lastGeneratedAt: null, questions: null });
+  const [faqStatus, setFaqStatus] = useState<FaqStatus>({ lastGeneratedAt: null, questions: null });
   const [faqRunError, setFaqRunError] = useState(false);
   const schema: Schema = loadFetcher.data?.schema ?? {};
 
@@ -553,7 +558,11 @@ export default function Configuration() {
       return;
     }
     setFaqRunError(false);
-    setFaqStatus({ lastGeneratedAt: data.lastGeneratedAt ?? null, questions: data.questions ?? null });
+    setFaqStatus({
+      lastGeneratedAt: data.lastGeneratedAt ?? null,
+      questions: data.questions ?? null,
+      enabled: data.enabled,
+    });
   }, [faqFetcher.data]);
 
   useEffect(() => {
@@ -576,6 +585,8 @@ export default function Configuration() {
   };
 
   const handleForceRunFaq = async () => {
+    if (!isFaqSuggestionsEnabled) return;
+
     const sessionToken = await shopify.idToken();
     faqFetcher.submit(
       JSON.stringify({ intent: "forceRunFaq", sessionToken, shopId }),
@@ -608,6 +619,12 @@ export default function Configuration() {
   const isLoading = loadFetcher.state !== "idle";
   const isSaving = saveFetcher.state !== "idle";
   const isFaqRunning = faqFetcher.state !== "idle";
+  const isFaqSuggestionsEnabled =
+    Number(getNestedValue(
+      (localValues.faq_suggestions as Record<string, unknown>) ?? {},
+      "general.enable"
+    ) ?? 1) === 1;
+  const isFaqButtonDisabled = isFaqRunning || !isFaqSuggestionsEnabled;
 
   // Block Save if any number field has an out-of-range value
   const hasValidationErrors = Object.entries(schema).some(([namespace, nsMeta]) =>
@@ -829,18 +846,22 @@ export default function Configuration() {
                   <div>
                     <button
                       type="button"
-                      onClick={() => { setFaqRunError(false); void handleForceRunFaq(); }}
-                      disabled={isFaqRunning}
+                      onClick={() => {
+                        if (isFaqButtonDisabled) return;
+                        setFaqRunError(false);
+                        void handleForceRunFaq();
+                      }}
+                      disabled={isFaqButtonDisabled}
                       style={{
-                        background: isFaqRunning ? theme.colors.disabled : theme.colors.surface,
-                        color: isFaqRunning ? theme.colors.textMuted : theme.colors.brand,
-                        border: `1px solid ${isFaqRunning ? theme.colors.borderSubtle : theme.colors.brand}`,
+                        background: isFaqButtonDisabled ? theme.colors.disabled : theme.colors.surface,
+                        color: isFaqButtonDisabled ? theme.colors.textMuted : theme.colors.brand,
+                        border: `1px solid ${isFaqButtonDisabled ? theme.colors.borderSubtle : theme.colors.brand}`,
                         borderRadius: theme.radius.button,
                         padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
                         fontFamily: "inherit",
                         fontSize: theme.typography.body,
                         fontWeight: 600,
-                        cursor: isFaqRunning ? "not-allowed" : "pointer",
+                        cursor: isFaqButtonDisabled ? "not-allowed" : "pointer",
                         display: "inline-flex",
                         alignItems: "center",
                         gap: theme.spacing.xs,

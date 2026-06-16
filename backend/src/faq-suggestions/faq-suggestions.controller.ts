@@ -5,6 +5,7 @@ import {
   HttpStatus,
   Param,
   Post,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import { ShopifySessionGuard } from '../auth/guards/shopify-session.guard';
@@ -14,6 +15,7 @@ import { FaqSuggestionsService } from './faq-suggestions.service';
 interface FaqResponse {
   questions: string[] | null;
   lastGeneratedAt: string | null;
+  enabled: boolean;
 }
 
 @Controller('faq')
@@ -24,13 +26,16 @@ export class FaqSuggestionsController {
   /** GET /faq/:shopId — returns current suggested FAQ questions and generation timestamp */
   @Get(':shopId')
   async getSuggestedFaqs(@Param('shopId') shopId: string): Promise<FaqResponse> {
-    const [questions, lastGeneratedAt] = await Promise.all([
+    const enabled = await this.faqService.isFaqEnabled(shopId);
+    const [questions, lastGeneratedAt] = enabled ? await Promise.all([
       this.faqService.getSuggestedFaqs(shopId),
       this.faqService.getLastGeneratedAt(shopId),
-    ]);
+    ]) : [await this.faqService.getFallbackFaqs(shopId), null];
+
     return {
       questions,
       lastGeneratedAt: lastGeneratedAt?.toISOString() ?? null,
+      enabled,
     };
   }
 
@@ -38,6 +43,11 @@ export class FaqSuggestionsController {
   @Post(':shopId/generate')
   @HttpCode(HttpStatus.OK)
   async forceGenerate(@Param('shopId') shopId: string): Promise<FaqResponse> {
+    const enabled = await this.faqService.isFaqEnabled(shopId);
+    if (!enabled) {
+      throw new ServiceUnavailableException('FAQ generation is disabled for this shop');
+    }
+
     await this.faqService.generateFaqForShop(shopId);
     // Always return the current persisted state, even if generation was skipped.
     // This ensures the frontend never clears existing questions on a skipped run.
@@ -48,6 +58,7 @@ export class FaqSuggestionsController {
     return {
       questions,
       lastGeneratedAt: lastGeneratedAt?.toISOString() ?? null,
+      enabled,
     };
   }
 }
