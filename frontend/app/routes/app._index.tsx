@@ -110,9 +110,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       `${backendUrl}/faq/${encodedShop}`,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
-    if (!res.ok) return json({ faqQuestions: null, faqLastGeneratedAt: null });
-    const data = await res.json() as { questions: string[] | null; lastGeneratedAt: string | null };
-    return json({ faqQuestions: data.questions, faqLastGeneratedAt: data.lastGeneratedAt });
+    if (!res.ok) return json({ faqQuestions: null, faqLastGeneratedAt: null, faqEnabled: true });
+    const data = await res.json() as {
+      questions: string[] | null;
+      lastGeneratedAt: string | null;
+      enabled?: boolean;
+    };
+    return json({
+      faqQuestions: data.questions,
+      faqLastGeneratedAt: data.lastGeneratedAt,
+      faqEnabled: data.enabled ?? true,
+    });
   }
 
   return json({});
@@ -636,7 +644,7 @@ export default function AssistantPage() {
   const historyFetcher = useFetcher<{ messages: ChatMessageRecord[] }>();
   const chatsFetcher = useFetcher<{ chats: ChatSummary[] }>();
   const configFetcher = useFetcher<{ lokte: LokteConfig; aiAssistantEnabled: boolean; devForceNotConfigured: boolean }>();
-  const faqFetcher = useFetcher<{ faqQuestions: string[] | null; faqLastGeneratedAt: string | null }>();
+  const faqFetcher = useFetcher<{ faqQuestions: string[] | null; faqLastGeneratedAt: string | null; faqEnabled: boolean }>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
@@ -678,6 +686,8 @@ export default function AssistantPage() {
     const questions = faqFetcher.data?.faqQuestions;
     if (Array.isArray(questions) && questions.length > 0) {
       setSuggestedQuestions(questions);
+    } else if (faqFetcher.data) {
+      setSuggestedQuestions(DEFAULT_FAQ_QUESTIONS);
     }
   }, [faqFetcher.data]);
 
