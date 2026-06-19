@@ -15,6 +15,13 @@ per-shop settings are available via the shared config API.
 | `lokte.general.api_key` | `secret` | `""` | Lokte API key — encrypted at rest |
 | `lokte.general.user_id` | `text` | `""` | Lokte user ID |
 
+Follow-up question prompting is configured under its own `follow_up_questions`
+namespace:
+
+| Dot-path | Field type | Default | Description |
+|----------|------------|---------|-------------|
+| `follow_up_questions.general.count` | `number` | `3` | Number of per-reply follow-up questions to request and render, from `0` to `5` |
+
 `secret` fields are stored encrypted (AES-256-GCM) and masked as `"****"` in API
 responses. See [ConfigRegistryModule](../config-registry/README.md#secret-field-encryption)
 for encryption setup.
@@ -64,3 +71,22 @@ POST /config/:shopId
 
 See [ConfigRegistryModule REST API](../config-registry/README.md#rest-api) for full
 endpoint reference.
+
+---
+
+## Follow-up question prompt decoration
+
+When `follow_up_questions.general.count` is greater than `0`,
+`LokteService` decorates the outgoing Lokte message with instructions to append a
+marked follow-up block:
+
+```text
+<FOLLOW_UP_QUESTIONS>
+- Question one?
+- Question two?
+</FOLLOW_UP_QUESTIONS>
+```
+
+The original user message is still saved to local chat history and FAQ question
+pool. Only the message sent to Lokte is decorated. The frontend strips the marker
+block from rendered markdown and converts the parsed questions into buttons.

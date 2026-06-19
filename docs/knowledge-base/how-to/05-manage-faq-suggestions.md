@@ -21,8 +21,8 @@ Suggestions can come from:
 
 The built-in defaults are:
 
-- "What are my top-selling products this month?"
-- "Show me recent orders that need attention."
+- "What the ingegrations are available for current project?"
+- "Provide a summary of the current project."
 - "How can I improve my store's conversion rate?"
 
 ---

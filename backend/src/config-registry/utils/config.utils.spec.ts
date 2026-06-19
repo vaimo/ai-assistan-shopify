@@ -7,12 +7,16 @@ import {
 
 describe('deepMerge', () => {
   it('merges flat objects with source winning on conflict', () => {
-    expect(deepMerge({ a: 1, b: 2 }, { b: 99, c: 3 })).toEqual({ a: 1, b: 99, c: 3 });
+    const target: Record<string, unknown> = { a: 1, b: 2 };
+    const source: Record<string, unknown> = { b: 99, c: 3 };
+    expect(deepMerge(target, source)).toEqual({ a: 1, b: 99, c: 3 });
   });
 
   it('deep-merges nested objects without replacing whole subtrees', () => {
-    const target = { order: { export: { enabled: true, format: 'csv' }, sync: { enabled: false } } };
-    const source = { order: { export: { enabled: false } } };
+    const target: Record<string, unknown> = {
+      order: { export: { enabled: true, format: 'csv' }, sync: { enabled: false } },
+    };
+    const source: Record<string, unknown> = { order: { export: { enabled: false } } };
     expect(deepMerge(target, source)).toEqual({
       order: { export: { enabled: false, format: 'csv' }, sync: { enabled: false } },
     });

@@ -15,6 +15,7 @@ import { ChatLoadingSpinner } from "~/components/ChatLoadingSpinner";
 import { EmptyChatState } from "~/components/EmptyChatState";
 import { NotConfiguredNotice } from "~/components/NotConfiguredNotice";
 import { assistantTheme as theme } from "~/styles/assistant-theme";
+import { parseFollowUpQuestions } from "~/utils/follow-up-questions";
 
 // ── DEV / TEST FLAGS ────────────────────────────────────────────────────────
 // Flags are driven by the Dev / Testing section in the Configuration UI
@@ -85,15 +86,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const authHeader = { Authorization: `Bearer ${sessionToken}` };
     const backendUrl = process.env.BACKEND_URL;
 
-    const [lokteRes, aiAssistantRes, devRes] = await Promise.all([
+    const [lokteRes, aiAssistantRes, followUpQuestionsRes, devRes] = await Promise.all([
       fetch(`${backendUrl}/config/${encodedShop}/lokte`, { headers: authHeader }),
       fetch(`${backendUrl}/config/${encodedShop}/ai_assistant`, { headers: authHeader }),
+      fetch(`${backendUrl}/config/${encodedShop}/follow_up_questions`, { headers: authHeader }),
       fetch(`${backendUrl}/config/${encodedShop}/dev_testing`, { headers: authHeader }),
     ]);
 
     const lokte = lokteRes.ok ? await lokteRes.json() : {};
     const aiAssistant = aiAssistantRes.ok
-      ? (await aiAssistantRes.json() as { general?: { enable?: unknown } })
+      ? (await aiAssistantRes.json() as { general?: { enable?: unknown; follow_up_question_count?: unknown } })
+      : {};
+    const followUpQuestions = followUpQuestionsRes.ok
+      ? (await followUpQuestionsRes.json() as { general?: { count?: unknown } })
       : {};
     const devCfg = devRes.ok
       ? (await devRes.json() as { general?: { force_not_configured?: unknown } })
@@ -101,7 +106,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const aiAssistantEnabled = Number(aiAssistant?.general?.enable) === 1;
     const devForceNotConfigured = Number(devCfg?.general?.force_not_configured) === 1;
 
-    return json({ lokte, aiAssistantEnabled, devForceNotConfigured });
+    return json({ lokte, aiAssistant, followUpQuestions, aiAssistantEnabled, devForceNotConfigured });
   }
 
   if (intent === "loadFaq") {
@@ -152,6 +157,27 @@ interface LokteConfig {
   };
 }
 
+interface AiAssistantConfig {
+  general?: {
+    enable?: number | boolean;
+    follow_up_question_count?: number | string;
+  };
+}
+
+interface FollowUpQuestionsConfig {
+  general?: {
+    count?: number | string;
+  };
+}
+
+const DEFAULT_FOLLOW_UP_QUESTION_COUNT = 3;
+
+function normalizeFollowUpQuestionCount(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_FOLLOW_UP_QUESTION_COUNT;
+  return Math.min(5, Math.max(0, Math.trunc(numeric)));
+}
+
 function isLokteConfigured(cfg: LokteConfig | null): boolean {
   if (!cfg) return false;
   const g = cfg.general;
@@ -165,8 +191,8 @@ function isLokteConfigured(cfg: LokteConfig | null): boolean {
 
 /** Absolute fallback questions — used when backend hasn't generated FAQs yet. */
 const DEFAULT_FAQ_QUESTIONS: string[] = [
-  "What are my top-selling products this month?",
-  "Show me recent orders that need attention.",
+  "What the ingegrations are available for current project?",
+  "Provide a summary of the current project.",
   "How can I improve my store's conversion rate?",
 ];
 
@@ -632,6 +658,68 @@ function AssistantMarkdown({ content, documents }: { content: string; documents:
   );
 }
 
+function FollowUpQuestionButtons({
+  questions,
+  disabled,
+  onSelectQuestion,
+}: {
+  questions: string[];
+  disabled: boolean;
+  onSelectQuestion: (question: string) => void;
+}) {
+  if (questions.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-start",
+        gap: theme.spacing.xs,
+        marginTop: theme.spacing.sm,
+        maxWidth: theme.sizes.bubbleMaxWidth,
+      }}
+    >
+      {questions.map((question) => (
+        <button
+          key={question}
+          type="button"
+          disabled={disabled}
+          onClick={() => onSelectQuestion(question)}
+          style={{
+            textAlign: "left",
+            width: "100%",
+            padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+            borderRadius: theme.radius.button,
+            border: `1px solid ${theme.colors.borderSubtle}`,
+            background: theme.colors.surface,
+            color: disabled ? theme.colors.textMuted : theme.colors.textPrimary,
+            cursor: disabled ? "not-allowed" : "pointer",
+            opacity: disabled ? 0.55 : 1,
+            fontFamily: "inherit",
+            fontSize: theme.typography.body,
+            fontWeight: 500,
+            lineHeight: 1.35,
+            boxShadow: theme.shadows.bubble,
+            transition: `background ${theme.transitions.fast}, border-color ${theme.transitions.fast}`,
+          }}
+          onMouseEnter={(e) => {
+            if (disabled) return;
+            e.currentTarget.style.background = theme.colors.suggestionHover;
+            e.currentTarget.style.borderColor = theme.colors.border;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = theme.colors.surface;
+            e.currentTarget.style.borderColor = theme.colors.borderSubtle;
+          }}
+        >
+          {question}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function AssistantPage() {
   const { shopId } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
@@ -643,7 +731,7 @@ export default function AssistantPage() {
   const clearFetcher = useFetcher<{ deleted?: boolean; cleared?: boolean }>();
   const historyFetcher = useFetcher<{ messages: ChatMessageRecord[] }>();
   const chatsFetcher = useFetcher<{ chats: ChatSummary[] }>();
-  const configFetcher = useFetcher<{ lokte: LokteConfig; aiAssistantEnabled: boolean; devForceNotConfigured: boolean }>();
+  const configFetcher = useFetcher<{ lokte: LokteConfig; aiAssistant: AiAssistantConfig; followUpQuestions: FollowUpQuestionsConfig; aiAssistantEnabled: boolean; devForceNotConfigured: boolean }>();
   const faqFetcher = useFetcher<{ faqQuestions: string[] | null; faqLastGeneratedAt: string | null; faqEnabled: boolean }>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -673,6 +761,10 @@ export default function AssistantPage() {
 
   const lokteConfig: LokteConfig | null = (configFetcher.data?.lokte as LokteConfig) ?? null;
   const aiAssistantEnabled = configFetcher.data?.aiAssistantEnabled !== false; // true until data arrives (avoid flicker)
+  const followUpQuestionCount = normalizeFollowUpQuestionCount(
+    configFetcher.data?.followUpQuestions?.general?.count ??
+      configFetcher.data?.aiAssistant?.general?.follow_up_question_count,
+  );
   const devForceNotConfigured = Boolean(configFetcher.data?.devForceNotConfigured);
   // Both AI Assistant AND Lokte must be enabled+configured
   const configured = !devForceNotConfigured && aiAssistantEnabled && isLokteConfigured(lokteConfig);
@@ -1163,84 +1255,98 @@ export default function AssistantPage() {
               gap: theme.spacing.lg,
             }}
           >
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                style={{
-                  display: "flex",
-                  flexDirection: msg.role === "user" ? "column" : "row",
-                  alignItems: msg.role === "user" ? "flex-end" : "flex-start",
-                  gap: theme.spacing.sm,
-                }}
-              >
-                {/* Logo avatar — left side of assistant messages */}
-                {msg.role === "assistant" && (
-                  <img
-                    src="/assets/logo.png"
-                    alt="AI Assistant"
-                    style={{
-                      width: theme.sizes.avatar,
-                      height: theme.sizes.avatar,
-                      borderRadius: theme.radius.button,
-                      objectFit: "contain",
-                      flexShrink: 0,
-                      marginTop: "2px",
-                    }}
-                  />
-                )}
+            {messages.map((msg) => {
+              const parsedAssistant =
+                msg.role === "assistant" && !msg.isError
+                  ? parseFollowUpQuestions(msg.content, followUpQuestionCount)
+                  : null;
 
-                <div style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
-                  <div
-                    style={{
-                      minWidth: 0,
-                      maxWidth: theme.sizes.bubbleMaxWidth,
-                      padding: `10px ${theme.spacing.lg}`,
-                      borderRadius:
-                        msg.role === "user"
-                          ? theme.radius.bubbleUser
-                          : theme.radius.bubbleAssistant,
-                      background: msg.isError
-                        ? theme.colors.errorBg
-                        : msg.role === "user"
-                        ? theme.colors.brand
-                        : theme.colors.surface,
-                      color: msg.isError
-                        ? theme.colors.errorText
-                        : msg.role === "user"
-                        ? theme.colors.white
-                        : theme.colors.textPrimary,
-                      border: msg.isError
-                        ? `1px solid ${theme.colors.errorBorder}`
-                        : "none",
-                      fontSize: theme.typography.body,
-                      lineHeight: 1.5,
-                      boxShadow: msg.isError ? "none" : theme.shadows.bubble,
-                      overflowWrap: "anywhere",
-                      wordBreak: "break-word",
-                      whiteSpace: msg.role === "user" ? "pre-wrap" : "normal",
-                    }}
-                  >
-                    {msg.isError && (
-                      <span style={{ marginRight: theme.spacing.xs }}>⚠️</span>
-                    )}
-                    {msg.role === "assistant" && !msg.isError ? (
-                      <AssistantMarkdown content={msg.content} documents={msg.documents ?? []} />
-                    ) : (
-                      msg.content
+              return (
+                <div
+                  key={msg.id}
+                  style={{
+                    display: "flex",
+                    flexDirection: msg.role === "user" ? "column" : "row",
+                    alignItems: msg.role === "user" ? "flex-end" : "flex-start",
+                    gap: theme.spacing.sm,
+                  }}
+                >
+                  {/* Logo avatar — left side of assistant messages */}
+                  {msg.role === "assistant" && (
+                    <img
+                      src="/assets/logo.png"
+                      alt="AI Assistant"
+                      style={{
+                        width: theme.sizes.avatar,
+                        height: theme.sizes.avatar,
+                        borderRadius: theme.radius.button,
+                        objectFit: "contain",
+                        flexShrink: 0,
+                        marginTop: "2px",
+                      }}
+                    />
+                  )}
+
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
+                    <div
+                      style={{
+                        minWidth: 0,
+                        maxWidth: theme.sizes.bubbleMaxWidth,
+                        padding: `10px ${theme.spacing.lg}`,
+                        borderRadius:
+                          msg.role === "user"
+                            ? theme.radius.bubbleUser
+                            : theme.radius.bubbleAssistant,
+                        background: msg.isError
+                          ? theme.colors.errorBg
+                          : msg.role === "user"
+                          ? theme.colors.brand
+                          : theme.colors.surface,
+                        color: msg.isError
+                          ? theme.colors.errorText
+                          : msg.role === "user"
+                          ? theme.colors.white
+                          : theme.colors.textPrimary,
+                        border: msg.isError
+                          ? `1px solid ${theme.colors.errorBorder}`
+                          : "none",
+                        fontSize: theme.typography.body,
+                        lineHeight: 1.5,
+                        boxShadow: msg.isError ? "none" : theme.shadows.bubble,
+                        overflowWrap: "anywhere",
+                        wordBreak: "break-word",
+                        whiteSpace: msg.role === "user" ? "pre-wrap" : "normal",
+                      }}
+                    >
+                      {msg.isError && (
+                        <span style={{ marginRight: theme.spacing.xs }}>⚠️</span>
+                      )}
+                      {parsedAssistant ? (
+                        <AssistantMarkdown content={parsedAssistant.content} documents={msg.documents ?? []} />
+                      ) : (
+                        msg.content
+                      )}
+                    </div>
+                    <span
+                      style={{
+                        marginTop: theme.spacing.xs,
+                        fontSize: theme.typography.tiny,
+                        color: msg.isError ? theme.colors.errorText : theme.colors.textMuted,
+                      }}
+                    >
+                      {msg.role === "user" ? "You" : msg.isError ? "Error" : "AI Assistant"}
+                    </span>
+                    {parsedAssistant && (
+                      <FollowUpQuestionButtons
+                        questions={parsedAssistant.questions}
+                        disabled={!configured || isLoading}
+                        onSelectQuestion={(question) => void sendMessage(question)}
+                      />
                     )}
                   </div>
-                  <span
-                    style={{
-                      marginTop: theme.spacing.xs,
-                      fontSize: theme.typography.tiny,
-                      color: msg.isError ? theme.colors.errorText : theme.colors.textMuted,
-                    }}
-                  >
-                    {msg.role === "user" ? "You" : msg.isError ? "Error" : "AI Assistant"}
-                  </span>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             {isLoading && (
               <div

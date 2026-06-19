@@ -74,10 +74,17 @@ interface ConfigFieldMeta {
   groupLabel: string;
   /** Human-readable field label (e.g. "API Key"). */
   keyLabel: string;
+  /** Optional helper copy shown near the field control. */
+  helpText?: string;
   /** How the FE should render this field. */
   fieldType: FieldType;
   /** Required when fieldType === 'select'. */
   options?: SelectOption[];
+  /** Optional lower/upper bounds for number fields. */
+  min?: number;
+  max?: number;
+  /** Optional field-specific validation copy for number fields. */
+  validationMessage?: string;
   /**
    * Optional for toggle fields — exactly [onOption, offOption].
    * Lets you use typed values (e.g. 1/0) instead of plain boolean.
@@ -98,7 +105,7 @@ interface ConfigNamespaceMeta {
 | `fieldType` | Rendered as | Notes |
 |-------------|-------------|-------|
 | `text` | Text input | Plain string value |
-| `number` | Number input | Stored as `number` |
+| `number` | Number input | Stored as `number`; `min`, `max`, and `validationMessage` may customize frontend validation |
 | `toggle` | Toggle switch | Use `toggleOptions` to specify typed on/off values (e.g. `1`/`0`) instead of `true`/`false` |
 | `select` | Dropdown | Must provide `options`; value saved is `SelectOption.value`, not the display string |
 | `secret` | Password input | Value is **encrypted at rest** (AES-256-GCM); masked as `"****"` in API responses |

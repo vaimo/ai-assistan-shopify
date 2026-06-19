@@ -17,10 +17,18 @@ export interface ConfigFieldMeta {
   groupLabel: string;
   /** Human-readable field label (e.g. "Enabled"). */
   keyLabel: string;
+  /** Optional helper copy shown near the field control. */
+  helpText?: string;
   /** How the FE should render this field. */
   fieldType: FieldType;
   /** Required when fieldType === 'select'. */
   options?: SelectOption[];
+  /** Optional lower bound for numeric fields. */
+  min?: number;
+  /** Optional upper bound for numeric fields. */
+  max?: number;
+  /** Optional field-specific validation copy for numeric bounds. */
+  validationMessage?: string;
   /**
    * Optional labeled options for a toggle field — exactly two entries:
    * index 0 is the "on" state, index 1 is the "off" state.

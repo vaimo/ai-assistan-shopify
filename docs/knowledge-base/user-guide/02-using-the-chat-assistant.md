@@ -36,11 +36,17 @@ While the assistant is thinking, you will see a "Thinking…" animation in the m
 
 When the conversation is empty, three suggested question cards appear:
 
-- **Product insights** — "What are my top-selling products this month?"
-- **Order management** — "Show me recent orders that need attention."
+- **Product insights** — "What the ingegrations are available for current project?"
+- **Order management** — "Provide a summary of the current project."
 - **Store optimization** — "How can I improve my store's conversion rate?"
 
 Clicking a card sends that question immediately. You can also type any question you like — the suggestions are just a starting point.
+
+## Follow-up question buttons
+
+After an assistant reply, you may see related follow-up questions below the message. These are generated for that specific reply and are meant to help you continue the conversation.
+
+Clicking a follow-up button sends that question immediately in the current chat. If an admin sets the follow-up question count to `0`, these buttons are hidden.
 
 ---
 
@@ -114,4 +120,5 @@ Contact your administrator if you see either of these.
 
 - Be specific. The assistant searches your team's indexed documents — vague questions may return generic answers.
 - If you get an unhelpful response, try rephrasing the question with more context.
+- Use follow-up buttons when they match what you want to ask next.
 - The assistant does not have access to live Shopify data unless that data is indexed in Lokte.
