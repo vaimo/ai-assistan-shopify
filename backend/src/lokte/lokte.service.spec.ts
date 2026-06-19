@@ -56,6 +56,7 @@ function setupHappyConfig() {
   mockConfigGet.mockImplementation((_shopId: string, path: string) => {
     if (path === 'lokte.general.enable') return Promise.resolve(1);
     if (path === 'lokte.general.user_id') return Promise.resolve('238');
+    if (path === 'follow_up_questions.general.count') return Promise.resolve(3);
     return Promise.resolve(undefined);
   });
   mockConfigGetDecrypted.mockResolvedValue('test-token');
@@ -142,6 +143,146 @@ describe('LokteService', () => {
       expect(result.answer).toBe('The answer is 42');
       expect(result.documents).toEqual([]);
       expect(result.chatId).toBe('sess-db-1');
+    });
+
+    it('decorates outgoing Lokte message with follow-up instructions when count is 3', async () => {
+      const ndjson = JSON.stringify({ obj: { type: 'message_delta', content: 'Decorated answer' } });
+
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'sess-follow-ups' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(ndjson),
+        } as unknown as Response);
+
+      const sut = makeSut();
+      await sut.askQuestion('shop.myshopify.com', 'user-id', 'Tell me about orders');
+
+      const sendMessageBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
+      expect(sendMessageBody.message).toContain('Tell me about orders');
+      expect(sendMessageBody.message).toContain('up to 3 concise related follow-up requests');
+      expect(sendMessageBody.message).toContain('Fewer than 3 is better than filler');
+      expect(sendMessageBody.message).toContain('leave the marker block empty');
+      expect(sendMessageBody.message).toContain('standalone next user request that can be sent verbatim');
+      expect(sendMessageBody.message).toContain('Do not start items with "Do you want"');
+      expect(sendMessageBody.message).toContain('<FOLLOW_UP_QUESTIONS>');
+      expect(sendMessageBody.message).toContain('</FOLLOW_UP_QUESTIONS>');
+      expect(mockMessageCreate).toHaveBeenCalledWith(expect.objectContaining({
+        role: 'user',
+        content: 'Tell me about orders',
+      }));
+    });
+
+    it('sends the original question to Lokte when follow-up count is 0', async () => {
+      mockConfigGet.mockImplementation((_shopId: string, path: string) => {
+        if (path === 'lokte.general.enable') return Promise.resolve(1);
+        if (path === 'lokte.general.user_id') return Promise.resolve('238');
+        if (path === 'follow_up_questions.general.count') return Promise.resolve(0);
+        return Promise.resolve(undefined);
+      });
+
+      const ndjson = JSON.stringify({ obj: { type: 'message_delta', content: 'Plain answer' } });
+
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'sess-no-follow-ups' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(ndjson),
+        } as unknown as Response);
+
+      const sut = makeSut();
+      await sut.askQuestion('shop.myshopify.com', 'user-id', 'Plain question');
+
+      const sendMessageBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
+      expect(sendMessageBody.message).toBe('Plain question');
+    });
+
+    it('falls back and clamps invalid follow-up counts before decorating', async () => {
+      mockConfigGet.mockImplementation((_shopId: string, path: string) => {
+        if (path === 'lokte.general.enable') return Promise.resolve(1);
+        if (path === 'lokte.general.user_id') return Promise.resolve('238');
+        if (path === 'follow_up_questions.general.count') return Promise.resolve(99);
+        return Promise.resolve(undefined);
+      });
+
+      const ndjson = JSON.stringify({ obj: { type: 'message_delta', content: 'Clamped answer' } });
+
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'sess-clamped-follow-ups' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(ndjson),
+        } as unknown as Response);
+
+      const sut = makeSut();
+      await sut.askQuestion('shop.myshopify.com', 'user-id', 'Clamped question');
+
+      let sendMessageBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
+      expect(sendMessageBody.message).toContain('up to 5 concise related follow-up requests');
+      expect(sendMessageBody.message).toContain('Use direct action wording');
+
+      mockConfigGet.mockImplementation((_shopId: string, path: string) => {
+        if (path === 'lokte.general.enable') return Promise.resolve(1);
+        if (path === 'lokte.general.user_id') return Promise.resolve('238');
+        if (path === 'follow_up_questions.general.count') return Promise.resolve('not-a-number');
+        return Promise.resolve(undefined);
+      });
+
+      setupHappyRepos();
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'sess-default-follow-ups' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(ndjson),
+        } as unknown as Response);
+
+      await sut.askQuestion('shop.myshopify.com', 'user-id', 'Defaulted question');
+      sendMessageBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
+      expect(sendMessageBody.message).toContain('up to 3 concise related follow-up requests');
+    });
+
+    it('uses the default follow-up count when config lookup fails', async () => {
+      mockConfigGet.mockImplementation((_shopId: string, path: string) => {
+        if (path === 'lokte.general.enable') return Promise.resolve(1);
+        if (path === 'lokte.general.user_id') return Promise.resolve('238');
+        if (path === 'follow_up_questions.general.count') return Promise.reject(new Error('config unavailable'));
+        return Promise.resolve(undefined);
+      });
+
+      const ndjson = JSON.stringify({ obj: { type: 'message_delta', content: 'Default answer' } });
+
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ id: 'sess-config-fallback' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(ndjson),
+        } as unknown as Response);
+
+      const sut = makeSut();
+      await sut.askQuestion('shop.myshopify.com', 'user-id', 'Fallback question');
+
+      const sendMessageBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
+      expect(sendMessageBody.message).toContain('up to 3 concise related follow-up requests');
     });
 
     it('joins message_delta pieces into answer', async () => {

@@ -35,8 +35,8 @@ export class FaqSuggestionsModule implements OnModuleInit {
         general: {
           enable: 1,
           cron_interval_hours: 24,
-          fallback_q1: 'What are my top-selling products this month?',
-          fallback_q2: 'Show me recent orders that need attention.',
+          fallback_q1: 'What the ingegrations are available for current project?',
+          fallback_q2: 'Provide a summary of the current project.',
           fallback_q3: "How can I improve my store's conversion rate?",
         },
       },
@@ -56,6 +56,9 @@ export class FaqSuggestionsModule implements OnModuleInit {
             groupLabel: 'General',
             keyLabel: 'Regeneration interval (hours)',
             fieldType: 'number',
+            min: 1,
+            max: 168,
+            validationMessage: 'Must be between 1 and 168 hours (1 week)',
           },
           'general.fallback_q1': {
             groupLabel: 'Fallback questions (shown when disabled or not yet generated)',

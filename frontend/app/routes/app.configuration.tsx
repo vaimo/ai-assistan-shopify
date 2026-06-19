@@ -27,8 +27,12 @@ interface SelectOption {
 interface ConfigFieldMeta {
   groupLabel: string;
   keyLabel: string;
+  helpText?: string;
   fieldType: FieldType;
   options?: SelectOption[];
+  min?: number;
+  max?: number;
+  validationMessage?: string;
   /** Exactly [onOption, offOption] for toggle fields. */
   toggleOptions?: [SelectOption, SelectOption];
 }
@@ -215,6 +219,71 @@ function plainInputStyle(isInvalid = false): React.CSSProperties {
   };
 }
 
+function getNumberBounds(fieldMeta: ConfigFieldMeta) {
+  return {
+    min: fieldMeta.min ?? 1,
+    max: fieldMeta.max ?? 168,
+    message: fieldMeta.validationMessage ?? "Must be between 1 and 168 hours (1 week)",
+  };
+}
+
+function HelpTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+      <button
+        type="button"
+        aria-label={text}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        style={{
+          width: 24,
+          height: 24,
+          borderRadius: "50%",
+          border: `1px solid ${theme.colors.border}`,
+          background: theme.colors.surface,
+          color: theme.colors.textSecondary,
+          cursor: "help",
+          fontFamily: "inherit",
+          fontSize: theme.typography.small,
+          fontWeight: 700,
+          lineHeight: "22px",
+          padding: 0,
+          textAlign: "center",
+        }}
+      >
+        ?
+      </button>
+      {open && (
+        <span
+          role="tooltip"
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "calc(100% + 6px)",
+            zIndex: 20,
+            width: 240,
+            padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+            borderRadius: theme.radius.button,
+            border: `1px solid ${theme.colors.borderSubtle}`,
+            background: theme.colors.surface,
+            boxShadow: theme.shadows.bubble,
+            color: theme.colors.textSecondary,
+            fontSize: theme.typography.small,
+            lineHeight: 1.4,
+            pointerEvents: "none",
+          }}
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function PlainInput({
   id,
   type = "text",
@@ -287,9 +356,10 @@ function ConfigField({
   // Number validation (computed here so error can occupy its own grid row)
   const numVal = fieldMeta.fieldType === "number" ? String(value ?? "") : "";
   const numParsed = Number(numVal);
+  const numBounds = getNumberBounds(fieldMeta);
   const numError =
-    fieldMeta.fieldType === "number" && numVal !== "" && (isNaN(numParsed) || numParsed < 1 || numParsed > 168)
-      ? "Must be between 1 and 168 hours (1 week)"
+    fieldMeta.fieldType === "number" && numVal !== "" && (isNaN(numParsed) || numParsed < numBounds.min || numParsed > numBounds.max)
+      ? numBounds.message
       : null;
 
   const renderControl = () => {
@@ -401,7 +471,18 @@ function ConfigField({
           {fieldMeta.keyLabel}
         </Text>
       </label>
-      <div style={{ gridColumn: 2, gridRow: 1 }}>{renderControl()}</div>
+      <div
+        style={{
+          gridColumn: 2,
+          gridRow: 1,
+          display: "flex",
+          alignItems: "center",
+          gap: theme.spacing.sm,
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>{renderControl()}</div>
+        {fieldMeta.helpText && <HelpTooltip text={fieldMeta.helpText} />}
+      </div>
       {numError && (
         <p
           style={{
@@ -633,7 +714,8 @@ export default function Configuration() {
       const raw = String(getNestedValue((localValues[namespace] as Record<string, unknown>) ?? {}, fieldPath) ?? "");
       if (raw === "") return false;
       const n = Number(raw);
-      return isNaN(n) || n < 1 || n > 168;
+      const bounds = getNumberBounds(fieldMeta);
+      return isNaN(n) || n < bounds.min || n > bounds.max;
     })
   );
 

@@ -39,6 +39,16 @@ This toggle acts as a global kill switch for the feature. Lokte credentials can 
 
 > **ℹ️ Note:** Even if Lokte is fully configured, the assistant will not function unless this toggle is on.
 
+## Follow-up questions
+
+The **Follow-up questions** section appears after FAQ Suggestions. Open the **Follow-up questions counter** accordion to control how many related questions the assistant should suggest after each reply.
+
+- `0` disables follow-up question buttons
+- `1` to `5` shows that many buttons below assistant replies
+- The default is `3`
+
+These are different from FAQ Suggestions. Follow-up questions are generated as part of each assistant response; FAQ Suggestions appear only on the empty chat screen.
+
 ---
 
 ## Lokte settings

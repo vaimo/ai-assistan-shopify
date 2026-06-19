@@ -71,5 +71,6 @@ Technical reference for developers and DevOps.
 - [Production Deployment Guide](../PROD_DEPLOY.md)
 - [Chat History Feature — Architecture](../Features/chat_history.md)
 - [FAQ Suggestions Feature — Architecture](../Features/faq-suggestions.md)
+- [Follow-Up Questions Feature — Architecture](../Features/follow-up-questions.md)
 - [ConfigRegistry Module Reference](../../backend/src/config-registry/README.md)
 - [Lokte Module Reference](../../backend/src/lokte/README.md)

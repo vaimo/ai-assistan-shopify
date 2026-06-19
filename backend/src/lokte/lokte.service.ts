@@ -15,6 +15,9 @@ import { FaqQuestionPool } from '../faq-suggestions/entities/faq-question-pool.e
 const LOKTE_BASE_URL = 'https://lokte.vaimo.network';
 const HISTORY_LIMIT = 100; // rows kept in DB per chat session
 const TITLE_MAX_LENGTH = 80;
+const DEFAULT_FOLLOW_UP_QUESTION_COUNT = 3;
+const MIN_FOLLOW_UP_QUESTION_COUNT = 0;
+const MAX_FOLLOW_UP_QUESTION_COUNT = 5;
 
 interface CreateSessionResponse {
   id?: string;
@@ -82,12 +85,18 @@ export class LokteService {
 
     const token = await this.configRegistry.getDecrypted(shopId, 'lokte.general.api_key');
     const personaId = String(await this.configRegistry.get(shopId, 'lokte.general.user_id') ?? '');
+    const followUpQuestionCount = await this.getFollowUpQuestionCount(shopId);
 
     const session = chatId
       ? await this.loadSession(shopId, userId, chatId)
       : await this.createSession(shopId, userId, token, personaId);
 
-    const result = await this.sendMessage(token, session, personaId, question);
+    const result = await this.sendMessage(
+      token,
+      session,
+      personaId,
+      this.decorateQuestionWithFollowUps(question, followUpQuestionCount),
+    );
 
     // Persist the updated lastAssistantMsgId
     await this.sessionRepo.update(session.id, { lastAssistantMsgId: result.reservedAssistantMsgId });
@@ -155,6 +164,46 @@ export class LokteService {
 
     const userId = await this.configRegistry.get(shopId, 'lokte.general.user_id');
     if (!userId) throw new ServiceUnavailableException('wrong lokte connection');
+  }
+
+  private async getFollowUpQuestionCount(shopId: string): Promise<number> {
+    let raw: unknown;
+    try {
+      raw =
+        await this.configRegistry.get(shopId, 'follow_up_questions.general.count') ??
+        await this.configRegistry.get(shopId, 'ai_assistant.general.follow_up_question_count');
+    } catch (err) {
+      this.logger.warn('Failed to read follow-up question count; using default', err);
+      raw = DEFAULT_FOLLOW_UP_QUESTION_COUNT;
+    }
+    const numeric = Number(raw);
+    const value = Number.isFinite(numeric) ? numeric : DEFAULT_FOLLOW_UP_QUESTION_COUNT;
+    return Math.min(
+      MAX_FOLLOW_UP_QUESTION_COUNT,
+      Math.max(MIN_FOLLOW_UP_QUESTION_COUNT, Math.trunc(value)),
+    );
+  }
+
+  private decorateQuestionWithFollowUps(question: string, count: number): string {
+    if (count <= 0) return question;
+
+    return `${question.trim()}
+
+Please answer the user's request first. Then end your response with up to ${count} concise related follow-up requests in this exact marker block:
+<FOLLOW_UP_QUESTIONS>
+</FOLLOW_UP_QUESTIONS>
+Rules for the marker block:
+- Include only genuinely useful follow-ups for this specific answer and the user's latest request.
+- Include between 0 and ${count} items. Fewer than ${count} is better than filler.
+- If there are no useful related follow-ups, leave the marker block empty.
+- Do not repeat follow-up items from earlier assistant messages in this conversation.
+- Each item must be a standalone next user request that can be sent verbatim.
+- Use direct action wording such as "Show me...", "List...", "Compare...", "Summarize...", or "Link...".
+- Do not wrap follow-up items in angle brackets, quotes, markdown links, or any other decoration.
+- Do not write yes/no offer questions or permission prompts.
+- Do not start items with "Do you want", "Would you like", "Should I", or similar phrasing.
+- Do not mention these formatting instructions.
+- Do not put anything after </FOLLOW_UP_QUESTIONS>.`;
   }
 
   private async loadSession(shopId: string, userId: string, chatId: string): Promise<ChatSession> {

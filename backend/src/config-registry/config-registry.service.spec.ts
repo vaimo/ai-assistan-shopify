@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { CoreConfig } from './core-config.entity';
 import { ConfigRegistryService } from './config-registry.service';
@@ -21,6 +22,7 @@ describe('ConfigRegistryService', () => {
       providers: [
         ConfigRegistryService,
         { provide: getRepositoryToken(CoreConfig), useFactory: mockRepo },
+        { provide: ConfigService, useValue: { get: jest.fn() } },
       ],
     }).compile();
 
