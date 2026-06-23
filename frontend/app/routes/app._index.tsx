@@ -734,6 +734,7 @@ export default function AssistantPage() {
   const configFetcher = useFetcher<{ lokte: LokteConfig; aiAssistant: AiAssistantConfig; followUpQuestions: FollowUpQuestionsConfig; aiAssistantEnabled: boolean; devForceNotConfigured: boolean }>();
   const faqFetcher = useFetcher<{ faqQuestions: string[] | null; faqLastGeneratedAt: string | null; faqEnabled: boolean }>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollAnimationFrameRef = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
@@ -757,6 +758,12 @@ export default function AssistantPage() {
   const initialChatLoadDone = useRef(false);
   // Detect real fetch completions: only process history when fetcher transitions non-idle → idle.
   const prevHistoryFetcherState = useRef<string>("idle");
+  const previousScrollState = useRef({
+    activeChatId: null as string | null,
+    historyReady: false,
+    isLoading: false,
+    messagesLength: 0,
+  });
   useEffect(() => { activeChatIdRef.current = activeChatId; }, [activeChatId]);
 
   const lokteConfig: LokteConfig | null = (configFetcher.data?.lokte as LokteConfig) ?? null;
@@ -772,6 +779,45 @@ export default function AssistantPage() {
 
   const isLoading = fetcher.state !== "idle" || isRestoredThinking;
   const hasMessages = messages.length > 0;
+
+  const scrollToLatestMessage = useCallback((behavior: ScrollBehavior = "auto") => {
+    if (scrollAnimationFrameRef.current !== null) {
+      cancelAnimationFrame(scrollAnimationFrameRef.current);
+    }
+
+    scrollAnimationFrameRef.current = requestAnimationFrame(() => {
+      scrollAnimationFrameRef.current = null;
+      messagesEndRef.current?.scrollIntoView({ block: "end", behavior });
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scrollAnimationFrameRef.current !== null) {
+        cancelAnimationFrame(scrollAnimationFrameRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const prev = previousScrollState.current;
+    const switchedChat = activeChatId !== prev.activeChatId;
+    const historyJustBecameReady = historyReady && !prev.historyReady;
+    const messageCountChanged = messages.length !== prev.messagesLength;
+    const loadingChanged = isLoading !== prev.isLoading;
+
+    previousScrollState.current = {
+      activeChatId,
+      historyReady,
+      isLoading,
+      messagesLength: messages.length,
+    };
+
+    if (!historyReady || !hasMessages) return;
+    if (!switchedChat && !historyJustBecameReady && !messageCountChanged && !loadingChanged) return;
+
+    scrollToLatestMessage(switchedChat || historyJustBecameReady ? "auto" : "smooth");
+  }, [activeChatId, hasMessages, historyReady, isLoading, messages.length, scrollToLatestMessage]);
 
   // Populate suggested questions from backend response (or keep defaults)
   useEffect(() => {
